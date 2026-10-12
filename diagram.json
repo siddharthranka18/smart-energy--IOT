@@ -16,7 +16,7 @@
       "top": -40,
       "left": 240,
       "attrs": {
-        "color": "yellow",
+        "color": "red",
         "label": "Room Light"
       }
     },
@@ -72,7 +72,9 @@
       "id": "pir1",
       "top": -140,
       "left": -140,
-      "attrs": {}
+      "attrs": {
+        "delayTime": "60"
+      }
     },
     {
       "type": "wokwi-photoresistor-sensor",
@@ -87,6 +89,69 @@
       "top": 220,
       "left": -160,
       "attrs": {}
+    },
+    {
+      "type": "wokwi-text",
+      "id": "txt_header",
+      "top": -220,
+      "left": -80,
+      "attrs": {
+        "text": "SMART ENERGY MANAGEMENT SYSTEM (PHASE 1)"
+      }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "txt_light",
+      "top": -50,
+      "left": 300,
+      "attrs": {
+        "text": "LIGHT LOAD (Red LED - GPIO 2)"
+      }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "txt_fan",
+      "top": 70,
+      "left": 300,
+      "attrs": {
+        "text": "FAN LOAD (Blue LED - GPIO 4)"
+      }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "txt_ac",
+      "top": 190,
+      "left": 300,
+      "attrs": {
+        "text": "AC LOAD (Orange LED - GPIO 5)"
+      }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "txt_pir",
+      "top": -140,
+      "left": -340,
+      "attrs": {
+        "text": "PIR OCCUPANCY SENSOR\n(Digital OUT -> GPIO 14)"
+      }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "txt_ldr",
+      "top": 50,
+      "left": -370,
+      "attrs": {
+        "text": "LDR LIGHT SENSOR\n(Analog AO -> GPIO 34)"
+      }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "txt_dht",
+      "top": 230,
+      "left": -380,
+      "attrs": {
+        "text": "DHT22 CLIMATE SENSOR\n(Digital SDA -> GPIO 15)"
+      }
     }
   ],
   "connections": [
