@@ -1,7 +1,6 @@
-
 {
   "version": 1,
-  "author": "Energy Management Project",
+  "author": "College Engineering Project - IoT Energy Management",
   "editor": "wokwi",
   "parts": [
     {
@@ -14,26 +13,101 @@
     {
       "type": "wokwi-led",
       "id": "led1",
-      "top": -10,
+      "top": -40,
       "left": 240,
       "attrs": {
-        "color": "red"
+        "color": "yellow",
+        "label": "Room Light"
       }
     },
     {
       "type": "wokwi-resistor",
       "id": "r1",
-      "top": 80,
-      "left": 180,
+      "top": 0,
+      "left": 190,
       "attrs": {
         "value": "220"
       }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_fan",
+      "top": 80,
+      "left": 240,
+      "attrs": {
+        "color": "blue",
+        "label": "Fan"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r_fan",
+      "top": 120,
+      "left": 190,
+      "attrs": {
+        "value": "220"
+      }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led_ac",
+      "top": 200,
+      "left": 240,
+      "attrs": {
+        "color": "orange",
+        "label": "AC"
+      }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r_ac",
+      "top": 240,
+      "left": 190,
+      "attrs": {
+        "value": "220"
+      }
+    },
+    {
+      "type": "wokwi-pir-motion-sensor",
+      "id": "pir1",
+      "top": -140,
+      "left": -140,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-photoresistor-sensor",
+      "id": "ldr1",
+      "top": 40,
+      "left": -160,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-dht22",
+      "id": "dht1",
+      "top": 220,
+      "left": -160,
+      "attrs": {}
     }
   ],
   "connections": [
     ["esp:2", "led1:A", "green", []],
     ["led1:C", "r1:1", "black", []],
-    ["r1:2", "esp:GND.1", "black", []]
+    ["r1:2", "esp:GND.1", "black", []],
+    ["esp:4", "led_fan:A", "blue", []],
+    ["led_fan:C", "r_fan:1", "black", []],
+    ["r_fan:2", "esp:GND.1", "black", []],
+    ["esp:5", "led_ac:A", "orange", []],
+    ["led_ac:C", "r_ac:1", "black", []],
+    ["r_ac:2", "esp:GND.1", "black", []],
+    ["esp:14", "pir1:OUT", "purple", []],
+    ["esp:5V", "pir1:VCC", "red", []],
+    ["esp:GND.1", "pir1:GND", "black", []],
+    ["esp:34", "ldr1:AO", "gold", []],
+    ["esp:3V3", "ldr1:VCC", "red", []],
+    ["esp:GND.1", "ldr1:GND", "black", []],
+    ["esp:15", "dht1:SDA", "green", []],
+    ["esp:3V3", "dht1:VCC", "red", []],
+    ["esp:GND.1", "dht1:GND", "black", []]
   ],
   "dependencies": {}
 }
