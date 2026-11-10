@@ -1,22 +1,34 @@
 # IoT-Based Intelligent Energy Management System
 
-An embedded IoT energy management and climate automation prototype designed for academic engineering demonstration. The system dynamically controls simulated lighting and multi-stage cooling appliances based on physical room occupancy, ambient lux/illumination levels, and temperature thresholds to minimize idle power waste.
+An embedded IoT energy management and climate automation prototype designed for academic engineering demonstration. The system dynamically controls simulated lighting and multi-stage cooling appliances based on physical room occupancy, ambient lux/illumination levels, and temperature thresholds to minimize idle power waste, while providing cloud-connected MQTT telemetry and remote manual control.
 
 ---
 
-## 📌 Phase 1 Scope & Architecture
+## 📌 Phase 1 & 2 System Architecture
 
-Phase 1 focuses on embedded hardware simulation, sensor acquisition, deterministic control rules, failsafe behavior, and structured serial telemetry on the **Espressif ESP32 Dev Module**.
+The architecture bridges edge sensor automation with cloud telemetry and control:
 
-> [!NOTE]
-> Physical electrical energy metering (voltage/current sensors) and remote telemetry (MQTT, FastAPI, PostgreSQL, React) are scheduled for later phases. Phase 1 models room appliances via simulated LED indicators.
+```
+[Sensors: PIR / LDR / DHT22]
+            │
+            ▼
+    [ESP32 Microcontroller]  ◄─── (Wokwi-GUEST Wi-Fi) ───►  [MQTT Broker: HiveMQ]
+    - Local Deterministic Rules                                    │
+    - Non-blocking Millis Loop                                     │
+    - Manual Override State Machine                                │
+            │                                                      ▼
+            │ (GPIO Outputs)                             [Subscribers & Control]
+            ▼                                            - Telemetry Stream
+    [Actuator LEDs: Light, Fan, AC]                      - Remote Override Commands
+```
 
-### Subsystem Overview
-- **Microcontroller**: ESP32-WROOM-32 (ESP32 DevKit-C v4)
-- **Occupancy Subsystem**: Digital PIR Motion Sensor (`wokwi-pir-motion-sensor`)
-- **Lighting Subsystem**: Analog LDR Photoresistor Module (`wokwi-photoresistor-sensor`) & Room Light Indicator LED
-- **Climate Subsystem**: DHT22 Digital Temperature & Humidity Sensor (`wokwi-dht22`), Fan LED (Ventilation Stage), and AC LED (Active Cooling Stage)
-- **Telemetry**: Non-blocking 115200 baud UART Serial Monitor (2-second cycle)
+### Subsystem Specifications
+- **Microcontroller**: Espressif ESP32 Dev Module (Wokwi virtual & physical hardware)
+- **Occupancy Subsystem**: Digital PIR Motion Sensor (`wokwi-pir-motion-sensor`) on GPIO 14
+- **Lighting Subsystem**: Analog LDR Photoresistor (`wokwi-photoresistor-sensor`) on GPIO 34 & Room Light LED on GPIO 2
+- **Climate Subsystem**: DHT22 Temp & Humidity (`wokwi-dht22`) on GPIO 15, Fan LED on GPIO 4, AC LED on GPIO 5
+- **Connectivity**: IEEE 802.11b/g/n Wi-Fi (`Wokwi-GUEST`) + MQTT v3.1.1 (`PubSubClient` + `ArduinoJson`)
+- **Telemetry Period**: 2000 ms periodic non-blocking sampling cycle
 
 ---
 
@@ -33,9 +45,7 @@ Phase 1 focuses on embedded hardware simulation, sensor acquisition, determinist
 
 ---
 
-## ⚙️ Control Rules & Logic Matrix
-
-The firmware operates on a priority decision matrix defined in [`src/main.cpp`](src/main.cpp):
+## ⚙️ Control Matrix & Priority Logic
 
 ```
                    +----------------------------------+
@@ -55,56 +65,150 @@ The firmware operates on a priority decision matrix defined in [`src/main.cpp`](
                    | Fan   = OFF    |   | 3. AC   : ON if Temp >= 32.0°C     |
                    | AC    = OFF    |   | Failsafe: DHT NaN -> Fan & AC OFF  |
                    +----------------+   +------------------------------------+
+                                    │
+                                    v
+                     [Phase 2 Manual Override Active?]
+                               /          \
+                         NO   /            \   YES
+                             v              v
+                  [Apply Automatic State]   [Apply Commanded State with Timer Expiry]
+                                            (DHT Failsafe Still Guards Climate Loads)
 ```
 
-1. **Rule 1 (Occupancy Override)**: If `occupied == false`, all simulated loads (Light, Fan, AC) are immediately turned **OFF** to eliminate phantom power consumption.
+1. **Rule 1 (Occupancy Override)**: If `occupied == false`, all simulated loads (Light, Fan, AC) are immediately turned **OFF** to eliminate phantom draw.
 2. **Rule 2 (Smart Lighting)**: If occupied and ambient light is below threshold (`rawLdr >= LDR_DARK_THRESHOLD`, 2000 ADC), Room Light LED turns **ON**; otherwise **OFF**.
 3. **Rule 3 (Stage 1 Cooling / Fan)**: If occupied and temperature $\ge 28.0^\circ\text{C}$, Fan LED turns **ON**; otherwise **OFF**.
 4. **Rule 4 (Stage 2 Cooling / AC)**: If occupied and temperature $\ge 32.0^\circ\text{C}$, AC LED turns **ON**; otherwise **OFF**.
-5. **Failsafe**: If DHT22 reads `NaN`, Fan and AC default safely to **OFF** while logging a diagnostic warning.
+5. **DHT Failsafe**: If DHT22 reads `NaN`, climate loads (Fan and AC) default safely to **OFF**.
+6. **Manual Override Precedence**: Valid MQTT commands temporarily supersede automatic rules for a configurable duration (`expires_in_seconds`, default 60s). When the timer expires, the node seamlessly resumes automatic control.
+
+---
+
+## 🌐 Phase 2 MQTT Communication Architecture
+
+### Network Parameters
+- **Wi-Fi SSID**: `Wokwi-GUEST` (open network, channel 6)
+- **MQTT Broker**: `broker.hivemq.com` (public demo broker, port 1883)
+- **Device ID**: `room-1`
+- **Topic Prefix**: `smart-energy-demo/iot-energy-mgmt`
+- **Client ID**: `iot-energy-room-1-<CHIP_ID>` (derived from ESP32 MAC address)
+
+> [!CAUTION]
+> The demonstration uses unencrypted TCP port 1883 on a public test broker without authentication. This is intended for academic simulation. Production IoT deployments must use TLS (port 8883) and mutual authentication certificates.
+
+### Topic Structure
+| Topic | Direction | Retained | Purpose |
+| :--- | :--- | :--- | :--- |
+| `smart-energy-demo/iot-energy-mgmt/room-1/telemetry` | ESP32 ➔ Broker | `false` | Full telemetry payload every 2 seconds |
+| `smart-energy-demo/iot-energy-mgmt/room-1/state` | ESP32 ➔ Broker | `false` | Command result acknowledgements |
+| `smart-energy-demo/iot-energy-mgmt/room-1/command` | Broker ➔ ESP32 | `false` | Remote control command ingestion |
+| `smart-energy-demo/iot-energy-mgmt/room-1/status` | ESP32 ➔ Broker | `true` | Node presence beacon (`online`) / LWT (`offline`) |
+
+---
+
+## 📦 JSON Message Formats
+
+### 1. Periodic Telemetry (`.../telemetry`)
+```json
+{
+  "schema_version": 1,
+  "message_type": "telemetry",
+  "device_id": "room-1",
+  "sequence": 14,
+  "uptime_ms": 28000,
+  "occupied": true,
+  "ldr_raw": 2850,
+  "is_dark": true,
+  "temperature_c": 30.5,
+  "humidity_percent": 55.0,
+  "dht_valid": true,
+  "light_on": true,
+  "fan_on": true,
+  "ac_on": false,
+  "control_mode": "automatic"
+}
+```
+*Note: In the event of a DHT22 sensor read failure, `temperature_c` and `humidity_percent` are serialized as JSON `null` (never invalid `NaN`), and `dht_valid` is set to `false`.*
+
+### 2. Inbound Remote Command (`.../command`)
+```json
+{
+  "schema_version": 1,
+  "command_id": "cmd-001",
+  "device_id": "room-1",
+  "target": "light",
+  "action": "off",
+  "mode": "manual",
+  "expires_in_seconds": 60
+}
+```
+- Supported targets: `light`, `fan`, `ac`, `all`, `automatic`
+- Supported actions: `on`, `off`
+- Target `automatic` immediately cancels overrides and restores sensor control.
+- Target `all` with action `off` disables all loads.
+
+### 3. Command Result Acknowledgement (`.../state`)
+```json
+{
+  "schema_version": 1,
+  "message_type": "command_result",
+  "device_id": "room-1",
+  "command_id": "cmd-001",
+  "accepted": true,
+  "reason": "command_applied",
+  "control_mode": "manual_override",
+  "light_on": false,
+  "fan_on": true,
+  "ac_on": false,
+  "uptime_ms": 28500
+}
+```
 
 ---
 
 ## 🚀 Quick Start Guide
 
-### 1. Prerequisites
-- [Git](https://git-scm.com/downloads)
-- [Antigravity IDE](https://antigravity.google/) or VS Code
-- [PlatformIO IDE extension](https://platformio.org/install/ide) or `platformio` CLI (`pip install platformio`)
-- [Wokwi Simulator extension](https://marketplace.visualstudio.com/items?itemName=Wokwi.wokwi-vscode)
-
-### 2. Build the Firmware
-Run the included build script:
+### 1. Build Firmware
 ```powershell
 .\build.bat
 ```
-Or directly using PlatformIO CLI:
-```powershell
-pio run
-```
+*(Uses PlatformIO CLI to compile `src/main.cpp` and produce `.pio\build\esp32dev\firmware.bin`)*
 
-### 3. Run Automated Logic Verification
-Run the offline C++ verification test suite:
+### 2. Run Automated Verification Test Suites
 ```powershell
 .\verify.bat
 ```
+Executes both test suites offline with GCC/MinGW:
+- **Phase 1 Suite**: 12/12 unit tests passing (deterministic local rules, edge cases, failsafes)
+- **Phase 2 Suite**: 40/40 assertions passing (command parsing, override timer, safety fallbacks)
 
-### 4. Launch Simulation in Wokwi
-1. Open [`diagram.json`](diagram.json).
-2. Press `F1` and select **Wokwi: Start Simulator** (or click the green Play button on the editor).
-3. Connect the Serial Monitor at **115200 baud**.
+### 3. Run Simulation in Wokwi
+1. Open [`diagram.json`](diagram.json) in VS Code.
+2. Click the green **Play** button.
+3. Open the Serial Monitor at **115200 baud** to view real-time cycle telemetry.
 
-### 5. Detailed Verification
-Refer to [`PHASE_1_VERIFICATION.md`](PHASE_1_VERIFICATION.md) for full step-by-step interactive testing procedures, serial log samples, boundary condition testing, and automated test suite execution.
+### 4. Remote Interaction via Mosquitto CLI / MQTT Explorer
+
+#### Subscribe to Live Telemetry:
+```powershell
+mosquitto_sub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/#" -v
+```
+
+#### Send Test Command (e.g., Turn Light OFF for 30s):
+```powershell
+mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -m '{\"schema_version\":1,\"command_id\":\"cmd-001\",\"device_id\":\"room-1\",\"target\":\"light\",\"action\":\"off\",\"mode\":\"manual\",\"expires_in_seconds\":30}'
+```
 
 ---
 
 ## 📋 Project Roadmap & Status
 
-- [x] Phase 1: ESP32 firmware build & logic control
-- [x] Phase 1: Wokwi simulated circuit (PIR, LDR, DHT22, LEDs)
-- [x] Phase 1: Automated logic verification test suite (12/12 tests passing)
-- [ ] Phase 2: Sensor integration & telemetry hardening
-- [ ] Phase 3: MQTT communication & broker integration
-- [ ] Phase 4: Python backend (FastAPI) and PostgreSQL database
-- [ ] Phase 5: Web monitoring dashboard (React / Vite)
+- [x] **Phase 1**: Embedded sensor acquisition & deterministic local load control
+- [x] **Phase 1**: Wokwi simulated circuit (PIR, LDR, DHT22, LEDs) & 12-case unit tests
+- [x] **Phase 2**: ESP32 Wi-Fi connectivity (`Wokwi-GUEST`) with non-blocking reconnection
+- [x] **Phase 2**: MQTT telemetry publication, command ingestion, and state acknowledgements
+- [x] **Phase 2**: Time-bounded manual override with automatic fallback and DHT safety enforcement
+- [x] **Phase 2**: Phase 2 logic verification test suite (40/40 assertions passing)
+- [ ] **Phase 3**: Telemetry ingestion service & physical energy metering (voltage/current sensors)
+- [ ] **Phase 4**: Python backend (FastAPI) and PostgreSQL database
+- [ ] **Phase 5**: Web monitoring and control dashboard (React / Vite)
