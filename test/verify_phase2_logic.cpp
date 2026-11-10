@@ -1,12 +1,11 @@
 /**
  * ============================================================================
  * Phase 2 Logic Verification Suite
- * Tests: command validation, manual override state machine, expiry logic,
+ * Tests: command validation, payload normalization (unescaping, trimming,
+ *        quoted string unwrapping), manual override state machine, expiry logic,
  *        DHT failsafe during override, automatic rules after override expiry.
  *
  * Standalone C++ host test (runs on MinGW / GCC, zero hardware dependencies).
- * NOTE: Host-side tests verify deterministic decision logic only; they do
- *       not replace network integration testing in Wokwi.
  * ============================================================================
  */
 
@@ -16,6 +15,7 @@
 #include <cmath>
 #include <string>
 #include <vector>
+#include <ArduinoJson.h>
 
 // Constants matching src/main.cpp
 static const char* DEVICE_ID             = "room-1";
@@ -24,6 +24,7 @@ static const uint32_t DEFAULT_OVERRIDE_SECONDS = 60;
 static const float TEMP_FAN_THRESHOLD    = 28.0f;
 static const float TEMP_AC_THRESHOLD     = 32.0f;
 static const int   LDR_DARK_THRESHOLD    = 2000;
+static const int   MQTT_MAX_PAYLOAD_BYTES= 512;
 
 struct SensorReadings {
     bool  occupied;
@@ -150,6 +151,97 @@ CmdResult applyParsedCommand(const ParsedCommand& cmd, ManualOverride& ovr,
     if (targetAc)    { ovr.acActive    = true; ovr.acValue    = desiredState; actuators.acOn    = desiredState; }
 
     return CmdResult::ACCEPTED;
+}
+
+// Exactly mirrors the normalization and parsing in src/main.cpp
+bool parseRawPayload(const uint8_t* payload, unsigned int length, ParsedCommand& outCmd) {
+    if (length == 0 || length > static_cast<unsigned int>(MQTT_MAX_PAYLOAD_BYTES)) {
+        outCmd.tooLarge = true;
+        outCmd.parseSuccess = false;
+        return false;
+    }
+
+    char rawBuf[MQTT_MAX_PAYLOAD_BYTES + 1];
+    memcpy(rawBuf, payload, length);
+    rawBuf[length] = '\0';
+
+    // 1. Trim leading whitespace
+    char* start = rawBuf;
+    while (*start && (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n')) {
+        start++;
+    }
+
+    // 2. Trim trailing whitespace
+    char* end = rawBuf + strlen(rawBuf);
+    while (end > start && (*(end - 1) == ' ' || *(end - 1) == '\t' || *(end - 1) == '\r' || *(end - 1) == '\n')) {
+        end--;
+        *end = '\0';
+    }
+
+    // 3. Strip outer single quotes if wrapped: '{"..."}'
+    if (*start == '\'' && end > start && *(end - 1) == '\'') {
+        start++;
+        end--;
+        *end = '\0';
+    }
+
+    // 4. Strip outer double quotes if wrapped: "{"..."}" or "{\"..."}"
+    if (*start == '"' && end > start && *(end - 1) == '"') {
+        if (*(start + 1) == '{' || (*(start + 1) == '\\' && *(start + 2) == '{')) {
+            start++;
+            end--;
+            *end = '\0';
+        }
+    }
+
+    // 5. Unescape \" to " if backslashes precede quotes
+    char cleanBuf[MQTT_MAX_PAYLOAD_BYTES + 1];
+    size_t w = 0;
+    for (char* p = start; *p != '\0'; p++) {
+        if (*p == '\\' && (*(p + 1) == '"' || *(p + 1) == '\\')) {
+            cleanBuf[w++] = *(p + 1);
+            p++;
+        } else {
+            cleanBuf[w++] = *p;
+        }
+    }
+    cleanBuf[w] = '\0';
+
+    StaticJsonDocument<512> doc;
+    DeserializationError err = deserializeJson(doc, static_cast<const char*>(cleanBuf));
+    if (err) {
+        outCmd.parseSuccess = false;
+        return false;
+    }
+
+    // 6. If JSON was serialized as a quoted string, unwrap the inner object
+    if (doc.is<const char*>()) {
+        const char* inner = doc.as<const char*>();
+        StaticJsonDocument<512> innerDoc;
+        DeserializationError innerErr = deserializeJson(innerDoc, inner);
+        if (!innerErr && innerDoc.is<JsonObject>()) {
+            doc = innerDoc;
+        } else {
+            outCmd.parseSuccess = false;
+            return false;
+        }
+    }
+
+    if (!doc.is<JsonObject>()) {
+        outCmd.parseSuccess = false;
+        return false;
+    }
+
+    outCmd.parseSuccess       = true;
+    outCmd.tooLarge           = false;
+    outCmd.command_id         = doc["command_id"] | "";
+    outCmd.device_id          = doc["device_id"]  | "";
+    outCmd.target             = doc["target"]     | "";
+    outCmd.action             = doc["action"]     | "";
+    outCmd.schema_version     = doc["schema_version"] | 0;
+    outCmd.expires_in_seconds = doc["expires_in_seconds"] | DEFAULT_OVERRIDE_SECONDS;
+
+    return true;
 }
 
 void updateManualOverride(ManualOverride& ovr, ActuatorState& actuators,
@@ -328,11 +420,11 @@ int main() {
     SensorReadings s15 = {true, 2500, true, 25.0f, 50.0f, true};
     applyParsedCommand(makeCmd("cmd-015", "room-1", "light", "off", 60), ovr, act, 1000);
     act = {true, false, false};
-    updateManualOverride(ovr, act, s15, 30000); // 30s elapsed < 60s
+    updateManualOverride(ovr, act, s15, 30000);
     checkBool("15. Light OFF at 30s (override active)", false, act.lightOn);
     checkMode("15. Mode is MANUAL_OVERRIDE at 30s", ControlMode::MANUAL_OVERRIDE, ovr.mode);
     act = {true, false, false};
-    updateManualOverride(ovr, act, s15, 62000); // 61s elapsed >= 60s
+    updateManualOverride(ovr, act, s15, 62000);
     checkMode("15. Mode returns to AUTOMATIC after 60s", ControlMode::AUTOMATIC, ovr.mode);
     checkBool("15. Light follows automatic (ON) after expiry", true, act.lightOn);
 
@@ -343,7 +435,7 @@ int main() {
     applyParsedCommand(makeCmd("cmd-016", "room-1", "fan", "off", 10), ovr, act, 0);
     checkBool("16. Fan forced OFF during override", false, act.fanOn);
     computeControlLogic(s16, act);
-    updateManualOverride(ovr, act, s16, 11000); // 11s elapsed > 10s
+    updateManualOverride(ovr, act, s16, 11000);
     checkMode("16. Mode is AUTOMATIC after expiry", ControlMode::AUTOMATIC, ovr.mode);
     checkBool("16. Fan ON again automatically (30C >= 28C)", true, act.fanOn);
 
@@ -374,7 +466,7 @@ int main() {
 
     // 20. Local automatic regression test
     ovr = ManualOverride();
-    SensorReadings s20 = {true, 500, false, 33.0f, 60.0f, true}; // Occupied, bright, hot
+    SensorReadings s20 = {true, 500, false, 33.0f, 60.0f, true};
     ActuatorState a20;
     computeControlLogic(s20, a20);
     updateManualOverride(ovr, a20, s20, 1000);
@@ -382,10 +474,67 @@ int main() {
     checkBool("20. Fan ON (33C >= 28C)",     true,  a20.fanOn);
     checkBool("20. AC ON (33C >= 32C)",      true,  a20.acOn);
 
+    // ============================================================
+    // Real-World Payload Parsing & Normalization Tests (Phase 2 Fix)
+    // ============================================================
+    std::cout << "\n--- Real-World MQTT Payload Normalization Tests ---\n";
+
+    // 21. Standard JSON payload parsing
+    {
+        std::string raw = "{\"schema_version\":1,\"command_id\":\"cmd-021\",\"device_id\":\"room-1\",\"target\":\"light\",\"action\":\"off\",\"mode\":\"manual\",\"expires_in_seconds\":60}";
+        ParsedCommand cmd;
+        bool parsed = parseRawPayload((const uint8_t*)raw.c_str(), raw.length(), cmd);
+        checkBool("21. Standard JSON parsed successfully", true, parsed);
+        checkBool("21. Command ID extracted accurately", true, cmd.command_id == "cmd-021");
+    }
+
+    // 22. Escaped quotes JSON (PowerShell/CMD literal backslashes)
+    {
+        std::string raw = "{\\\"schema_version\\\":1,\\\"command_id\\\":\\\"cmd-022\\\",\\\"device_id\\\":\\\"room-1\\\",\\\"target\\\":\\\"fan\\\",\\\"action\\\":\\\"on\\\",\\\"mode\\\":\\\"manual\\\",\\\"expires_in_seconds\\\":30}";
+        ParsedCommand cmd;
+        bool parsed = parseRawPayload((const uint8_t*)raw.c_str(), raw.length(), cmd);
+        checkBool("22. Escaped quotes JSON normalized and parsed", true, parsed);
+        checkBool("22. Target extracted from unescaped JSON", true, cmd.target == "fan");
+    }
+
+    // 23. Outer single quotes: '{"..."}'
+    {
+        std::string raw = "'{\"schema_version\":1,\"command_id\":\"cmd-023\",\"device_id\":\"room-1\",\"target\":\"ac\",\"action\":\"on\",\"mode\":\"manual\",\"expires_in_seconds\":45}'";
+        ParsedCommand cmd;
+        bool parsed = parseRawPayload((const uint8_t*)raw.c_str(), raw.length(), cmd);
+        checkBool("23. Outer single quotes stripped and parsed", true, parsed);
+        checkBool("23. Target extracted accurately", true, cmd.target == "ac");
+    }
+
+    // 24. Outer double quotes + escaped quotes: "{\"..."}"
+    {
+        std::string raw = "\"{\\\"schema_version\\\":1,\\\"command_id\\\":\\\"cmd-024\\\",\\\"device_id\\\":\\\"room-1\\\",\\\"target\\\":\\\"all\\\",\\\"action\\\":\\\"off\\\",\\\"mode\\\":\\\"manual\\\",\\\"expires_in_seconds\":60}\"";
+        ParsedCommand cmd;
+        bool parsed = parseRawPayload((const uint8_t*)raw.c_str(), raw.length(), cmd);
+        checkBool("24. Quoted string unwrapped and parsed", true, parsed);
+        checkBool("24. Target 'all' identified", true, cmd.target == "all");
+    }
+
+    // 25. Trailing whitespace / CRLF
+    {
+        std::string raw = " \r\n  {\"schema_version\":1,\"command_id\":\"cmd-025\",\"device_id\":\"room-1\",\"target\":\"automatic\",\"action\":\"off\"}  \n\r ";
+        ParsedCommand cmd;
+        bool parsed = parseRawPayload((const uint8_t*)raw.c_str(), raw.length(), cmd);
+        checkBool("25. Whitespace and CRLF trimmed cleanly", true, parsed);
+        checkBool("25. Target 'automatic' extracted", true, cmd.target == "automatic");
+    }
+
+    // 26. Malformed JSON returns false
+    {
+        std::string raw = "{ this is definitely not valid json }";
+        ParsedCommand cmd;
+        bool parsed = parseRawPayload((const uint8_t*)raw.c_str(), raw.length(), cmd);
+        checkBool("26. Truly invalid JSON correctly rejected", false, parsed);
+    }
+
     std::cout << "------------------------------------------------------------\n";
     std::cout << "Results: " << g_passed << " / " << (g_passed + g_failed) << " tests passed.\n";
     std::cout << "============================================================\n";
 
     return (g_failed == 0) ? 0 : 1;
 }
-

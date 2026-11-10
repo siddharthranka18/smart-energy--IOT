@@ -327,6 +327,10 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
         return; // Ignore other topics
     }
 
+    Serial.printf("[MQTT] Raw payload (%u bytes): ", length);
+    Serial.write(payload, length);
+    Serial.println();
+
     // Capture current actuator outputs
     ActuatorState current;
     current.lightOn = (digitalRead(PIN_LIGHT_LED) == HIGH);
@@ -425,11 +429,78 @@ void parseAndApplyCommand(const byte* payload, unsigned int length, ActuatorStat
         return;
     }
 
+    // Copy to null-terminated buffer for inspection and normalization
+    char rawBuf[MQTT_MAX_PAYLOAD_BYTES + 1];
+    memcpy(rawBuf, payload, length);
+    rawBuf[length] = '\0';
+
+    // 1. Trim leading whitespace
+    char* start = rawBuf;
+    while (*start && (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n')) {
+        start++;
+    }
+
+    // 2. Trim trailing whitespace
+    char* end = rawBuf + strlen(rawBuf);
+    while (end > start && (*(end - 1) == ' ' || *(end - 1) == '\t' || *(end - 1) == '\r' || *(end - 1) == '\n')) {
+        end--;
+        *end = '\0';
+    }
+
+    // 3. Strip outer single quotes if wrapped: '{"..."}'
+    if (*start == '\'' && end > start && *(end - 1) == '\'') {
+        start++;
+        end--;
+        *end = '\0';
+    }
+
+    // 4. Strip outer double quotes if wrapped around JSON object/escaped object: "{"..."}" or "{\"..."}"
+    if (*start == '"' && end > start && *(end - 1) == '"') {
+        if (*(start + 1) == '{' || (*(start + 1) == '\\' && *(start + 2) == '{')) {
+            start++;
+            end--;
+            *end = '\0';
+        }
+    }
+
+    // 5. Unescape \" to " if backslashes precede quotes (common from Windows PowerShell / CLI)
+    char cleanBuf[MQTT_MAX_PAYLOAD_BYTES + 1];
+    size_t w = 0;
+    for (char* p = start; *p != '\0'; p++) {
+        if (*p == '\\' && (*(p + 1) == '"' || *(p + 1) == '\\')) {
+            cleanBuf[w++] = *(p + 1);
+            p++;
+        } else {
+            cleanBuf[w++] = *p;
+        }
+    }
+    cleanBuf[w] = '\0';
+
     StaticJsonDocument<512> doc;
-    DeserializationError err = deserializeJson(doc, payload, length);
+    DeserializationError err = deserializeJson(doc, static_cast<const char*>(cleanBuf));
     if (err) {
         Serial.print("[CMD] Rejected: malformed JSON: ");
         Serial.println(err.c_str());
+        publishCommandResult("", false, "invalid_json");
+        return;
+    }
+
+    // 6. If JSON was serialized as a quoted string, unwrap the inner object
+    if (doc.is<const char*>()) {
+        const char* inner = doc.as<const char*>();
+        StaticJsonDocument<512> innerDoc;
+        DeserializationError innerErr = deserializeJson(innerDoc, inner);
+        if (!innerErr && innerDoc.is<JsonObject>()) {
+            doc = innerDoc;
+        } else {
+            Serial.println("[CMD] Rejected: inner string JSON invalid.");
+            publishCommandResult("", false, "invalid_json");
+            return;
+        }
+    }
+
+    if (!doc.is<JsonObject>()) {
+        Serial.println("[CMD] Rejected: root element is not a JSON object.");
         publishCommandResult("", false, "invalid_json");
         return;
     }

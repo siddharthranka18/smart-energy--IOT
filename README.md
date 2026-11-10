@@ -180,7 +180,7 @@ The architecture bridges edge sensor automation with cloud telemetry and control
 ```
 Executes both test suites offline with GCC/MinGW:
 - **Phase 1 Suite**: 12/12 unit tests passing (deterministic local rules, edge cases, failsafes)
-- **Phase 2 Suite**: 40/40 assertions passing (command parsing, override timer, safety fallbacks)
+- **Phase 2 Suite**: 51/51 assertions passing (command parsing, payload normalization, override timer, safety fallbacks)
 
 ### 3. Run Simulation in Wokwi
 1. Open [`diagram.json`](diagram.json) in VS Code.
@@ -194,10 +194,18 @@ Executes both test suites offline with GCC/MinGW:
 mosquitto_sub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/#" -v
 ```
 
-#### Send Test Command (e.g., Turn Light OFF for 30s):
+#### Send Test Command (Turn Light OFF for 30s):
+**Windows PowerShell (using pipeline):**
 ```powershell
-mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -m '{\"schema_version\":1,\"command_id\":\"cmd-001\",\"device_id\":\"room-1\",\"target\":\"light\",\"action\":\"off\",\"mode\":\"manual\",\"expires_in_seconds\":30}'
+'{"schema_version":1,"command_id":"cmd-001","device_id":"room-1","target":"light","action":"off","mode":"manual","expires_in_seconds":30}' | mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -l
 ```
+
+**Linux / macOS / Git Bash:**
+```bash
+mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -m '{"schema_version":1,"command_id":"cmd-001","device_id":"room-1","target":"light","action":"off","mode":"manual","expires_in_seconds":30}'
+```
+
+*(Note: The firmware includes built-in payload normalization that automatically unescapes `\"` and strips wrapper quotes, so commands sent via any shell or MQTT tool are parsed reliably.)*
 
 ---
 
@@ -208,7 +216,7 @@ mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt
 - [x] **Phase 2**: ESP32 Wi-Fi connectivity (`Wokwi-GUEST`) with non-blocking reconnection
 - [x] **Phase 2**: MQTT telemetry publication, command ingestion, and state acknowledgements
 - [x] **Phase 2**: Time-bounded manual override with automatic fallback and DHT safety enforcement
-- [x] **Phase 2**: Phase 2 logic verification test suite (40/40 assertions passing)
+- [x] **Phase 2**: Phase 2 logic verification test suite (51/51 assertions passing)
 - [ ] **Phase 3**: Telemetry ingestion service & physical energy metering (voltage/current sensors)
 - [ ] **Phase 4**: Python backend (FastAPI) and PostgreSQL database
 - [ ] **Phase 5**: Web monitoring and control dashboard (React / Vite)

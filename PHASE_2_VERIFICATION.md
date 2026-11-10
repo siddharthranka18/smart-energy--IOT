@@ -199,7 +199,7 @@ Run the offline C++ test suite containing all 12 Phase 1 rules and 20 Phase 2 co
 Results: 12 / 12 tests passed.
 
 [Phase 2] Compiling and running Phase 2 command and override tests...
-Results: 40 / 40 tests passed.
+Results: 51 / 51 tests passed.
 
 [ALL PASS] All Phase 1 and Phase 2 tests passed cleanly!
 ```
@@ -230,20 +230,27 @@ mosquitto_sub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt
 
 ### Step 5: Test Command Execution
 
+The firmware features built-in payload normalization that automatically unescapes `\"`, strips outer quotes, and trims whitespace/newlines. Commands can be sent via PowerShell, CMD, Linux, or MQTT Explorer:
+
 #### 1. Turn Room Light OFF (Manual Override for 30s):
+**Windows PowerShell (recommended):**
 ```powershell
-mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -m '{\"schema_version\":1,\"command_id\":\"cmd-001\",\"device_id\":\"room-1\",\"target\":\"light\",\"action\":\"off\",\"mode\":\"manual\",\"expires_in_seconds\":30}'
+'{"schema_version":1,"command_id":"cmd-001","device_id":"room-1","target":"light","action":"off","mode":"manual","expires_in_seconds":30}' | mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -l
+```
+**Linux / macOS / Git Bash:**
+```bash
+mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -m '{"schema_version":1,"command_id":"cmd-001","device_id":"room-1","target":"light","action":"off","mode":"manual","expires_in_seconds":30}'
 ```
 *Expected*: Room Light LED turns OFF immediately. Serial outputs `[CMD] Manual override applied: light -> off for 30 s.` Telemetry updates to `"control_mode": "manual_override"`. After 30 seconds, `[Override] Timer expired. Restoring automatic control.` is printed and light returns to sensor rule.
 
 #### 2. Turn ALL Loads OFF:
 ```powershell
-mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -m '{\"schema_version\":1,\"command_id\":\"cmd-002\",\"device_id\":\"room-1\",\"target\":\"all\",\"action\":\"off\",\"mode\":\"manual\",\"expires_in_seconds\":60}'
+'{"schema_version":1,"command_id":"cmd-002","device_id":"room-1","target":"all","action":"off","mode":"manual","expires_in_seconds":60}' | mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -l
 ```
 
 #### 3. Return to Automatic Mode:
 ```powershell
-mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -m '{\"schema_version\":1,\"command_id\":\"cmd-003\",\"device_id\":\"room-1\",\"target\":\"automatic\",\"action\":\"off\"}'
+'{"schema_version":1,"command_id":"cmd-003","device_id":"room-1","target":"automatic","action":"off"}' | mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -l
 ```
 
 ---

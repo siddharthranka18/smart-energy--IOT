@@ -29,7 +29,7 @@ if %ERRORLEVEL% neq 0 (
 
 echo.
 echo [Phase 2] Compiling and running Phase 2 command and override tests...
-%GPP% -std=c++11 test\verify_phase2_logic.cpp -o test\verify_phase2_logic.exe
+%GPP% -std=c++11 -I .pio\libdeps\esp32dev\ArduinoJson\src test\verify_phase2_logic.cpp -o test\verify_phase2_logic.exe
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Failed to compile test\verify_phase2_logic.cpp
     exit /b 1
