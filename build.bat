@@ -17,7 +17,9 @@ if %ERRORLEVEL% equ 0 (
     echo.
     echo [SUCCESS] Firmware compiled cleanly!
     echo Firmware binary ready at: .pio\build\esp32dev\firmware.bin
+    exit /b 0
 ) else (
     echo.
     echo [ERROR] Build failed! Check compiler errors above.
+    exit /b 1
 )

@@ -54,12 +54,15 @@ constexpr unsigned long WIFI_RETRY_INTERVAL_MS  = 10000UL;         // Retry peri
 static const char*      MQTT_BROKER             = "broker.hivemq.com"; // Public non-TLS demo broker
 constexpr uint16_t      MQTT_PORT               = 1883;
 static const char*      DEVICE_ID               = "room-1";
-static const char*      TOPIC_PREFIX            = "smart-energy-demo/iot-energy-mgmt"; // Project prefix
+static const char*      TOPIC_PREFIX            = "smart-energy-demo/siddharthranka18-smart-energy-2026";
+static const char*      FIRMWARE_VERSION        = "2.1.0";
 
 constexpr unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000UL;       // Reconnect retry interval
 constexpr uint32_t      DEFAULT_OVERRIDE_SECONDS   = 60;           // Default manual override duration
+constexpr uint32_t      MAX_OVERRIDE_SECONDS       = 3600;         // Reject excessive/overflow-prone durations
 constexpr int           MQTT_SCHEMA_VERSION        = 1;            // Message schema version
 constexpr int           MQTT_MAX_PAYLOAD_BYTES     = 512;          // Reject oversized payloads
+constexpr int           MQTT_BUFFER_BYTES          = 768;          // Payload + topic + MQTT framing headroom
 
 // Dynamically generated topic strings
 static char TOPIC_TELEMETRY[128];
@@ -118,6 +121,9 @@ static ManualOverride g_override;
 static unsigned long  g_sequenceNumber      = 0;
 static unsigned long  g_lastWifiAttemptMs   = 0;
 static unsigned long  g_lastMqttReconnectMs = 0;
+static SensorReadings g_lastSensors{};
+static ActuatorState  g_lastActuators{};
+static bool           g_haveSensorReadings   = false;
 
 // ============================================================================
 // Forward Function Declarations
@@ -135,6 +141,7 @@ void publishTelemetry(const SensorReadings &sensors, const ActuatorState &actuat
 void publishDeviceStatus(bool online);
 void publishCommandResult(const char* commandId, bool accepted, const char* reason, const ActuatorState* actuators = nullptr);
 void parseAndApplyCommand(const byte* payload, unsigned int length, ActuatorState &currentActuators);
+void clearManualOverride();
 void updateManualOverride(ActuatorState &actuators, const SensorReadings &sensors);
 const char* controlModeString();
 
@@ -189,8 +196,9 @@ void setup() {
     // Configure MQTT client
     mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
     mqttClient.setCallback(onMqttMessage);
-    mqttClient.setBufferSize(512);
+    mqttClient.setBufferSize(MQTT_BUFFER_BYTES);
     mqttClient.setKeepAlive(60);
+    mqttClient.setSocketTimeout(3); // Limit blocking time during an unreachable-broker attempt
 }
 
 // ============================================================================
@@ -216,6 +224,8 @@ void loop() {
 
         // 1. Read and validate all sensor inputs (Phase 1)
         readSensors(sensors);
+        g_lastSensors = sensors;
+        g_haveSensorReadings = true;
 
         // 2. Evaluate energy management control rules (Phase 1)
         computeControlLogic(sensors, actuators);
@@ -225,6 +235,7 @@ void loop() {
 
         // 4. Drive physical/simulated actuators
         applyActuators(actuators);
+        g_lastActuators = actuators;
 
         // 5. Output structured serial diagnostics
         printStatus(sensors, actuators);
@@ -285,8 +296,15 @@ void maintainMqttConnection() {
     g_lastMqttReconnectMs = now;
 
     // Retained LWT payload for unexpected disconnection
-    char lwtPayload[80];
-    snprintf(lwtPayload, sizeof(lwtPayload), "{\"device_id\":\"%s\",\"status\":\"offline\"}", DEVICE_ID);
+    char lwtPayload[192];
+    snprintf(
+        lwtPayload,
+        sizeof(lwtPayload),
+        "{\"schema_version\":%d,\"message_type\":\"device_status\",\"device_id\":\"%s\",\"firmware_version\":\"%s\",\"status\":\"offline\"}",
+        MQTT_SCHEMA_VERSION,
+        DEVICE_ID,
+        FIRMWARE_VERSION
+    );
 
     Serial.print("[MQTT] Connecting to broker as ");
     Serial.print(MQTT_CLIENT_ID);
@@ -331,11 +349,8 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
     Serial.write(payload, length);
     Serial.println();
 
-    // Capture current actuator outputs
-    ActuatorState current;
-    current.lightOn = (digitalRead(PIN_LIGHT_LED) == HIGH);
-    current.fanOn   = (digitalRead(PIN_FAN_LED)   == HIGH);
-    current.acOn    = (digitalRead(PIN_AC_LED)    == HIGH);
+    // Start from the last state that was actually applied to the GPIO outputs.
+    ActuatorState current = g_lastActuators;
 
     parseAndApplyCommand(payload, length, current);
 }
@@ -347,6 +362,7 @@ void publishTelemetry(const SensorReadings &sensors, const ActuatorState &actuat
     doc["schema_version"]   = MQTT_SCHEMA_VERSION;
     doc["message_type"]     = "telemetry";
     doc["device_id"]        = DEVICE_ID;
+    doc["firmware_version"] = FIRMWARE_VERSION;
     doc["sequence"]         = g_sequenceNumber;
     doc["uptime_ms"]        = millis();
     doc["occupied"]         = sensors.occupied;
@@ -380,12 +396,15 @@ void publishTelemetry(const SensorReadings &sensors, const ActuatorState &actuat
 }
 
 void publishDeviceStatus(bool online) {
-    StaticJsonDocument<128> doc;
-    doc["device_id"] = DEVICE_ID;
-    doc["status"]    = online ? "online" : "offline";
-    doc["uptime_ms"] = millis();
+    StaticJsonDocument<192> doc;
+    doc["schema_version"] = MQTT_SCHEMA_VERSION;
+    doc["message_type"]   = "device_status";
+    doc["device_id"]      = DEVICE_ID;
+    doc["firmware_version"] = FIRMWARE_VERSION;
+    doc["status"]         = online ? "online" : "offline";
+    doc["uptime_ms"]      = millis();
 
-    char buffer[128];
+    char buffer[192];
     serializeJson(doc, buffer, sizeof(buffer));
 
     bool ok = mqttClient.publish(TOPIC_STATUS, buffer, true); // Retained
@@ -396,10 +415,11 @@ void publishDeviceStatus(bool online) {
 }
 
 void publishCommandResult(const char* commandId, bool accepted, const char* reason, const ActuatorState* actuators) {
-    StaticJsonDocument<256> doc;
+    StaticJsonDocument<384> doc;
     doc["schema_version"] = MQTT_SCHEMA_VERSION;
     doc["message_type"]   = "command_result";
     doc["device_id"]      = DEVICE_ID;
+    doc["firmware_version"] = FIRMWARE_VERSION;
     doc["command_id"]     = commandId ? commandId : "";
     doc["accepted"]       = accepted;
     doc["reason"]         = reason;
@@ -412,7 +432,7 @@ void publishCommandResult(const char* commandId, bool accepted, const char* reas
     }
     doc["uptime_ms"]      = millis();
 
-    char buffer[256];
+    char buffer[384];
     serializeJson(doc, buffer, sizeof(buffer));
 
     bool ok = mqttClient.publish(TOPIC_STATE, buffer, false);
@@ -509,8 +529,23 @@ void parseAndApplyCommand(const byte* payload, unsigned int length, ActuatorStat
     const char* deviceId  = doc["device_id"]  | "";
     const char* target    = doc["target"]     | "";
     const char* action    = doc["action"]     | "";
+    const char* mode      = doc["mode"]       | "manual";
     int schemaVersion     = doc["schema_version"] | 0;
-    uint32_t expirySec    = doc["expires_in_seconds"] | DEFAULT_OVERRIDE_SECONDS;
+    uint32_t expirySec    = DEFAULT_OVERRIDE_SECONDS;
+
+    JsonVariant expiryValue = doc["expires_in_seconds"];
+    if (!expiryValue.isNull()) {
+        if (expiryValue.is<uint32_t>()) {
+            const uint32_t requested = expiryValue.as<uint32_t>();
+            if (requested >= 1 && requested <= MAX_OVERRIDE_SECONDS) {
+                expirySec = requested;
+            } else {
+                Serial.println("[CMD] Invalid override duration; using safe default.");
+            }
+        } else {
+            Serial.println("[CMD] Non-numeric override duration; using safe default.");
+        }
+    }
 
     // 1. Schema check
     if (schemaVersion != MQTT_SCHEMA_VERSION) {
@@ -548,9 +583,22 @@ void parseAndApplyCommand(const byte* payload, unsigned int length, ActuatorStat
 
     // Return to automatic mode immediately
     if (targetAuto) {
-        g_override = ManualOverride(); // Reset
+        clearManualOverride();
+        if (g_haveSensorReadings) {
+            computeControlLogic(g_lastSensors, currentActuators);
+        } else {
+            currentActuators = {false, false, false};
+        }
+        applyActuators(currentActuators);
+        g_lastActuators = currentActuators;
         Serial.println("[CMD] Reset to automatic control mode.");
         publishCommandResult(commandId, true, "returned_to_automatic", &currentActuators);
+        return;
+    }
+
+    if (strcmp(mode, "manual") != 0) {
+        Serial.println("[CMD] Rejected: non-automatic targets require mode 'manual'.");
+        publishCommandResult(commandId, false, "invalid_mode");
         return;
     }
 
@@ -564,7 +612,6 @@ void parseAndApplyCommand(const byte* payload, unsigned int length, ActuatorStat
         return;
     }
 
-    if (expirySec == 0) expirySec = DEFAULT_OVERRIDE_SECONDS;
     const unsigned long now = millis();
 
     // Target ALL
@@ -587,6 +634,7 @@ void parseAndApplyCommand(const byte* payload, unsigned int length, ActuatorStat
         currentActuators.acOn    = false;
 
         applyActuators(currentActuators);
+        g_lastActuators = currentActuators;
         Serial.printf("[CMD] ALL loads turned OFF via manual override (%lu s).\n", (unsigned long)expirySec);
         publishCommandResult(commandId, true, "command_applied", &currentActuators);
         return;
@@ -594,9 +642,37 @@ void parseAndApplyCommand(const byte* payload, unsigned int length, ActuatorStat
 
     // Single target override
     const bool desiredState = actionOn;
+
+    if (desiredState && (targetFan || targetAc)) {
+        if (!g_haveSensorReadings) {
+            Serial.println("[CMD] Rejected: no validated sensor sample is available.");
+            publishCommandResult(commandId, false, "sensor_data_unavailable");
+            return;
+        }
+        if (!g_lastSensors.dhtValid) {
+            Serial.println("[CMD] Rejected: DHT22 is invalid; climate ON command blocked.");
+            publishCommandResult(commandId, false, "dht_invalid");
+            return;
+        }
+    }
+
+    // A new single-target command replaces the previous override session.
+    // Rebuild the unselected outputs from current automatic rules immediately.
+    clearManualOverride();
+    if (g_haveSensorReadings) {
+        computeControlLogic(g_lastSensors, currentActuators);
+    } else {
+        currentActuators = {false, false, false};
+    }
+
     g_override.mode       = ControlMode::MANUAL_OVERRIDE;
     g_override.startMs    = now;
     g_override.durationMs = static_cast<unsigned long>(expirySec) * 1000UL;
+    // Set the active-channel mask only after the automatic baseline has been
+    // rebuilt. Keep this explicit so no previous channel can remain selected.
+    g_override.lightActive = false;
+    g_override.fanActive   = false;
+    g_override.acActive    = false;
 
     if (targetLight) {
         g_override.lightActive = true;
@@ -613,6 +689,7 @@ void parseAndApplyCommand(const byte* payload, unsigned int length, ActuatorStat
     }
 
     applyActuators(currentActuators);
+    g_lastActuators = currentActuators;
     Serial.printf("[CMD] Manual override applied: %s -> %s for %lu s.\n", target, action, (unsigned long)expirySec);
     publishCommandResult(commandId, true, "command_applied", &currentActuators);
 }
@@ -622,7 +699,7 @@ void updateManualOverride(ActuatorState &actuators, const SensorReadings &sensor
 
     // Check expiration using safe unsigned difference
     if (millis() - g_override.startMs >= g_override.durationMs) {
-        g_override = ManualOverride(); // Reset to AUTOMATIC
+        clearManualOverride();
         Serial.println("[Override] Timer expired. Restoring automatic control.");
         return;
     }
@@ -639,6 +716,20 @@ void updateManualOverride(ActuatorState &actuators, const SensorReadings &sensor
         // DHT failsafe protection: invalid DHT forces climate loads safely OFF
         actuators.acOn = (g_override.acValue && sensors.dhtValid);
     }
+}
+
+void clearManualOverride() {
+    // Clear every field explicitly. This guarantees that a new command cannot
+    // inherit an active channel from the previous override session.
+    g_override.mode        = ControlMode::AUTOMATIC;
+    g_override.startMs     = 0;
+    g_override.durationMs  = 0;
+    g_override.lightActive = false;
+    g_override.lightValue  = false;
+    g_override.fanActive   = false;
+    g_override.fanValue    = false;
+    g_override.acActive    = false;
+    g_override.acValue     = false;
 }
 
 const char* controlModeString() {
@@ -772,11 +863,18 @@ void printStatus(const SensorReadings &sensors, const ActuatorState &actuators) 
     // Simulated Loads
     Serial.println("Simulated Loads   :");
     Serial.print("  - Room Light    : ");
-    Serial.println(actuators.lightOn ? "ON" : "OFF");
+    Serial.print(actuators.lightOn ? "ON" : "OFF");
+    if (g_override.mode == ControlMode::MANUAL_OVERRIDE && g_override.lightActive) {
+        Serial.println(" (Manual Override)");
+    } else {
+        Serial.println();
+    }
 
     Serial.print("  - Fan (Vent)    : ");
     Serial.print(actuators.fanOn ? "ON" : "OFF");
-    if (!sensors.occupied) {
+    if (g_override.mode == ControlMode::MANUAL_OVERRIDE && g_override.fanActive) {
+        Serial.println(" (Manual Override)");
+    } else if (!sensors.occupied) {
         Serial.println(" (Disabled - Unoccupied)");
     } else if (!sensors.dhtValid) {
         Serial.println(" (Safe Default - Sensor Error)");
@@ -788,7 +886,9 @@ void printStatus(const SensorReadings &sensors, const ActuatorState &actuators) 
 
     Serial.print("  - AC (Cooling)  : ");
     Serial.print(actuators.acOn ? "ON" : "OFF");
-    if (!sensors.occupied) {
+    if (g_override.mode == ControlMode::MANUAL_OVERRIDE && g_override.acActive) {
+        Serial.println(" (Manual Override)");
+    } else if (!sensors.occupied) {
         Serial.println(" (Disabled - Unoccupied)");
     } else if (!sensors.dhtValid) {
         Serial.println(" (Safe Default - Sensor Error)");

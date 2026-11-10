@@ -37,7 +37,7 @@ Phase 2 extends the local automated energy controller into a networked IoT node:
 | **MQTT Broker** | `broker.hivemq.com` | Public demo non-TLS broker (Port 1883) |
 | **Device Identifier** | `room-1` | Target room node |
 | **MQTT Client ID** | `iot-energy-room-1-<CHIP_ID>` | Unique hex chip MAC suffix prevents collision |
-| **Project Topic Prefix** | `smart-energy-demo/iot-energy-mgmt` | Topic namespace avoiding public broker clashes |
+| **Project Topic Prefix** | `smart-energy-demo/siddharthranka18-smart-energy-2026` | Project-unique namespace avoiding public broker clashes |
 
 > [!CAUTION]
 > Public MQTT on port 1883 is unencrypted and carries no authentication. It is intended solely for academic demonstration and simulation. Production deployments must use TLS (port 8883) and mutual authentication.
@@ -53,7 +53,7 @@ Phase 2 extends the local automated energy controller into a networked IoT node:
 | `.../room-1/command` | Broker ➔ ESP32 | `false` | 1 | Inbound remote control commands |
 | `.../room-1/status` | ESP32 ➔ Broker | `true` | 0 | Node presence beacon (`online`) and Last Will & Testament (`offline`) |
 
-Full topic prefix: `smart-energy-demo/iot-energy-mgmt/room-1/`
+Full topic prefix: `smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/`
 
 ---
 
@@ -67,6 +67,7 @@ Published every 2 seconds.
   "schema_version": 1,
   "message_type": "telemetry",
   "device_id": "room-1",
+  "firmware_version": "2.1.0",
   "sequence": 42,
   "uptime_ms": 84000,
   "occupied": true,
@@ -88,6 +89,7 @@ Published every 2 seconds.
   "schema_version": 1,
   "message_type": "telemetry",
   "device_id": "room-1",
+  "firmware_version": "2.1.0",
   "sequence": 43,
   "uptime_ms": 86000,
   "occupied": true,
@@ -135,6 +137,9 @@ Published every 2 seconds.
 - `invalid_action_for_all`: Attempting `action: on` with `target: all`
 - `message_too_large`: Payload exceeds 512 bytes
 - `invalid_json`: Unparseable or malformed JSON
+- `invalid_mode`: A non-automatic target did not use `mode: manual`
+- `sensor_data_unavailable`: A climate ON command arrived before the first validated sensor sample
+- `dht_invalid`: A climate ON command was blocked because DHT22 was invalid
 
 ---
 
@@ -147,6 +152,7 @@ Published immediately after GPIO outputs are set.
   "schema_version": 1,
   "message_type": "command_result",
   "device_id": "room-1",
+  "firmware_version": "2.1.0",
   "command_id": "cmd-101",
   "accepted": true,
   "reason": "command_applied",
@@ -164,6 +170,7 @@ Published immediately after GPIO outputs are set.
   "schema_version": 1,
   "message_type": "command_result",
   "device_id": "room-1",
+  "firmware_version": "2.1.0",
   "command_id": "cmd-102",
   "accepted": false,
   "reason": "invalid_target",
@@ -177,11 +184,11 @@ Published immediately after GPIO outputs are set.
 ### 4. Device Status & Last Will and Testament (`.../status`)
 - **Online (Retained upon broker connect)**:
   ```json
-  {"device_id":"room-1","status":"online","uptime_ms":1200}
+  {"schema_version":1,"message_type":"device_status","device_id":"room-1","firmware_version":"2.1.0","status":"online","uptime_ms":1200}
   ```
 - **Offline (Retained Last Will and Testament)**:
   ```json
-  {"device_id":"room-1","status":"offline"}
+  {"schema_version":1,"message_type":"device_status","device_id":"room-1","firmware_version":"2.1.0","status":"offline"}
   ```
 
 ---
@@ -189,7 +196,7 @@ Published immediately after GPIO outputs are set.
 ## 🛠️ Step-by-Step Self-Verification Guide
 
 ### Step 1: Automated Unit & Logic Verification Suite
-Run the offline C++ test suite containing all 12 Phase 1 rules and 20 Phase 2 command/override scenarios:
+Run the offline C++ test suite containing all 12 Phase 1 rules and 26 Phase 2 command/override scenarios:
 ```powershell
 .\verify.bat
 ```
@@ -199,7 +206,7 @@ Run the offline C++ test suite containing all 12 Phase 1 rules and 20 Phase 2 co
 Results: 12 / 12 tests passed.
 
 [Phase 2] Compiling and running Phase 2 command and override tests...
-Results: 51 / 51 tests passed.
+Results: 63 / 63 tests passed.
 
 [ALL PASS] All Phase 1 and Phase 2 tests passed cleanly!
 ```
@@ -214,18 +221,18 @@ Confirms clean compilation with PlatformIO and outputs binary to `.pio\build\esp
 1. Open [`diagram.json`](diagram.json) in VS Code / Antigravity IDE.
 2. Press `F1` and select **Wokwi: Start Simulator** (or click the green Play button).
 3. Open the Serial Monitor at **115200 baud**.
-4. Observe Wi-Fi connect (`[WiFi] Connected! IP Address: 10.0.0.2`) and MQTT connect (`[MQTT] Subscribed to: smart-energy-demo/iot-energy-mgmt/room-1/command`).
+4. Observe Wi-Fi connect (`[WiFi] Connected! IP Address: 10.0.0.2`) and MQTT connect (`[MQTT] Subscribed to: smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/command`).
 
 ### Step 4: Monitor Telemetry via Mosquitto CLI / MQTT Explorer
 
 #### Using Mosquitto CLI:
 ```powershell
-mosquitto_sub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/#" -v
+mosquitto_sub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/#" -v
 ```
 
 #### Using MQTT Explorer:
 1. Connect to Host: `broker.hivemq.com`, Port: `1883`.
-2. Add topic subscription: `smart-energy-demo/iot-energy-mgmt/room-1/#`.
+2. Add topic subscription: `smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/#`.
 3. View real-time incoming JSON messages on `/telemetry`, `/state`, and `/status`.
 
 ### Step 5: Test Command Execution
@@ -235,22 +242,22 @@ The firmware features built-in payload normalization that automatically unescape
 #### 1. Turn Room Light OFF (Manual Override for 30s):
 **Windows PowerShell (recommended):**
 ```powershell
-'{"schema_version":1,"command_id":"cmd-001","device_id":"room-1","target":"light","action":"off","mode":"manual","expires_in_seconds":30}' | mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -l
+'{"schema_version":1,"command_id":"cmd-001","device_id":"room-1","target":"light","action":"off","mode":"manual","expires_in_seconds":30}' | mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/command" -l
 ```
 **Linux / macOS / Git Bash:**
 ```bash
-mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -m '{"schema_version":1,"command_id":"cmd-001","device_id":"room-1","target":"light","action":"off","mode":"manual","expires_in_seconds":30}'
+mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/command" -m '{"schema_version":1,"command_id":"cmd-001","device_id":"room-1","target":"light","action":"off","mode":"manual","expires_in_seconds":30}'
 ```
 *Expected*: Room Light LED turns OFF immediately. Serial outputs `[CMD] Manual override applied: light -> off for 30 s.` Telemetry updates to `"control_mode": "manual_override"`. After 30 seconds, `[Override] Timer expired. Restoring automatic control.` is printed and light returns to sensor rule.
 
 #### 2. Turn ALL Loads OFF:
 ```powershell
-'{"schema_version":1,"command_id":"cmd-002","device_id":"room-1","target":"all","action":"off","mode":"manual","expires_in_seconds":60}' | mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -l
+'{"schema_version":1,"command_id":"cmd-002","device_id":"room-1","target":"all","action":"off","mode":"manual","expires_in_seconds":60}' | mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/command" -l
 ```
 
 #### 3. Return to Automatic Mode:
 ```powershell
-'{"schema_version":1,"command_id":"cmd-003","device_id":"room-1","target":"automatic","action":"off"}' | mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -l
+'{"schema_version":1,"command_id":"cmd-003","device_id":"room-1","target":"automatic","action":"off"}' | mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/command" -l
 ```
 
 ---

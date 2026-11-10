@@ -90,7 +90,7 @@ The architecture bridges edge sensor automation with cloud telemetry and control
 - **Wi-Fi SSID**: `Wokwi-GUEST` (open network, channel 6)
 - **MQTT Broker**: `broker.hivemq.com` (public demo broker, port 1883)
 - **Device ID**: `room-1`
-- **Topic Prefix**: `smart-energy-demo/iot-energy-mgmt`
+- **Topic Prefix**: `smart-energy-demo/siddharthranka18-smart-energy-2026`
 - **Client ID**: `iot-energy-room-1-<CHIP_ID>` (derived from ESP32 MAC address)
 
 > [!CAUTION]
@@ -99,10 +99,10 @@ The architecture bridges edge sensor automation with cloud telemetry and control
 ### Topic Structure
 | Topic | Direction | Retained | Purpose |
 | :--- | :--- | :--- | :--- |
-| `smart-energy-demo/iot-energy-mgmt/room-1/telemetry` | ESP32 ➔ Broker | `false` | Full telemetry payload every 2 seconds |
-| `smart-energy-demo/iot-energy-mgmt/room-1/state` | ESP32 ➔ Broker | `false` | Command result acknowledgements |
-| `smart-energy-demo/iot-energy-mgmt/room-1/command` | Broker ➔ ESP32 | `false` | Remote control command ingestion |
-| `smart-energy-demo/iot-energy-mgmt/room-1/status` | ESP32 ➔ Broker | `true` | Node presence beacon (`online`) / LWT (`offline`) |
+| `smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/telemetry` | ESP32 ➔ Broker | `false` | Full telemetry payload every 2 seconds |
+| `smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/state` | ESP32 ➔ Broker | `false` | Command result acknowledgements |
+| `smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/command` | Broker ➔ ESP32 | `false` | Remote control command ingestion |
+| `smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/status` | ESP32 ➔ Broker | `true` | Node presence beacon (`online`) / LWT (`offline`) |
 
 ---
 
@@ -114,6 +114,7 @@ The architecture bridges edge sensor automation with cloud telemetry and control
   "schema_version": 1,
   "message_type": "telemetry",
   "device_id": "room-1",
+  "firmware_version": "2.1.0",
   "sequence": 14,
   "uptime_ms": 28000,
   "occupied": true,
@@ -146,6 +147,9 @@ The architecture bridges edge sensor automation with cloud telemetry and control
 - Supported actions: `on`, `off`
 - Target `automatic` immediately cancels overrides and restores sensor control.
 - Target `all` with action `off` disables all loads.
+- Climate `on` commands are rejected until a valid DHT22 sample is available.
+- Override durations outside 1–3600 seconds use the safe 60-second default.
+- A new single-target command replaces the previous override session; unselected loads immediately return to automatic rules.
 
 ### 3. Command Result Acknowledgement (`.../state`)
 ```json
@@ -153,6 +157,7 @@ The architecture bridges edge sensor automation with cloud telemetry and control
   "schema_version": 1,
   "message_type": "command_result",
   "device_id": "room-1",
+  "firmware_version": "2.1.0",
   "command_id": "cmd-001",
   "accepted": true,
   "reason": "command_applied",
@@ -180,7 +185,7 @@ The architecture bridges edge sensor automation with cloud telemetry and control
 ```
 Executes both test suites offline with GCC/MinGW:
 - **Phase 1 Suite**: 12/12 unit tests passing (deterministic local rules, edge cases, failsafes)
-- **Phase 2 Suite**: 51/51 assertions passing (command parsing, payload normalization, override timer, safety fallbacks)
+- **Phase 2 Suite**: 63/63 assertions passing (payload normalization, command validation, immediate climate safety, override replacement, timer, automatic restoration)
 
 ### 3. Run Simulation in Wokwi
 1. Open [`diagram.json`](diagram.json) in VS Code.
@@ -191,18 +196,18 @@ Executes both test suites offline with GCC/MinGW:
 
 #### Subscribe to Live Telemetry:
 ```powershell
-mosquitto_sub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/#" -v
+mosquitto_sub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/#" -v
 ```
 
 #### Send Test Command (Turn Light OFF for 30s):
 **Windows PowerShell (using pipeline):**
 ```powershell
-'{"schema_version":1,"command_id":"cmd-001","device_id":"room-1","target":"light","action":"off","mode":"manual","expires_in_seconds":30}' | mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -l
+'{"schema_version":1,"command_id":"cmd-001","device_id":"room-1","target":"light","action":"off","mode":"manual","expires_in_seconds":30}' | mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/command" -l
 ```
 
 **Linux / macOS / Git Bash:**
 ```bash
-mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt/room-1/command" -m '{"schema_version":1,"command_id":"cmd-001","device_id":"room-1","target":"light","action":"off","mode":"manual","expires_in_seconds":30}'
+mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/command" -m '{"schema_version":1,"command_id":"cmd-001","device_id":"room-1","target":"light","action":"off","mode":"manual","expires_in_seconds":30}'
 ```
 
 *(Note: The firmware includes built-in payload normalization that automatically unescapes `\"` and strips wrapper quotes, so commands sent via any shell or MQTT tool are parsed reliably.)*
@@ -216,7 +221,7 @@ mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/iot-energy-mgmt
 - [x] **Phase 2**: ESP32 Wi-Fi connectivity (`Wokwi-GUEST`) with non-blocking reconnection
 - [x] **Phase 2**: MQTT telemetry publication, command ingestion, and state acknowledgements
 - [x] **Phase 2**: Time-bounded manual override with automatic fallback and DHT safety enforcement
-- [x] **Phase 2**: Phase 2 logic verification test suite (51/51 assertions passing)
+- [x] **Phase 2**: Phase 2 logic verification test suite (63/63 assertions passing)
 - [ ] **Phase 3**: Telemetry ingestion service & physical energy metering (voltage/current sensors)
 - [ ] **Phase 4**: Python backend (FastAPI) and PostgreSQL database
 - [ ] **Phase 5**: Web monitoring and control dashboard (React / Vite)

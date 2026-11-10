@@ -21,6 +21,7 @@
 static const char* DEVICE_ID             = "room-1";
 static const int   MQTT_SCHEMA_VERSION   = 1;
 static const uint32_t DEFAULT_OVERRIDE_SECONDS = 60;
+static const uint32_t MAX_OVERRIDE_SECONDS = 3600;
 static const float TEMP_FAN_THRESHOLD    = 28.0f;
 static const float TEMP_AC_THRESHOLD     = 32.0f;
 static const int   LDR_DARK_THRESHOLD    = 2000;
@@ -65,6 +66,9 @@ enum class CmdResult {
     INVALID_TARGET,
     INVALID_ACTION,
     INVALID_ACTION_FOR_ALL,
+    INVALID_MODE,
+    SENSOR_DATA_UNAVAILABLE,
+    DHT_INVALID,
     RETURNED_TO_AUTOMATIC
 };
 
@@ -79,6 +83,9 @@ static const char* cmdResultName(CmdResult r) {
         case CmdResult::INVALID_TARGET:         return "INVALID_TARGET";
         case CmdResult::INVALID_ACTION:         return "INVALID_ACTION";
         case CmdResult::INVALID_ACTION_FOR_ALL: return "INVALID_ACTION_FOR_ALL";
+        case CmdResult::INVALID_MODE:           return "INVALID_MODE";
+        case CmdResult::SENSOR_DATA_UNAVAILABLE:return "SENSOR_DATA_UNAVAILABLE";
+        case CmdResult::DHT_INVALID:            return "DHT_INVALID";
         case CmdResult::RETURNED_TO_AUTOMATIC:  return "RETURNED_TO_AUTOMATIC";
         default:                                return "UNKNOWN";
     }
@@ -90,10 +97,15 @@ struct ParsedCommand {
     std::string device_id          = "";
     std::string target             = "";
     std::string action             = "";
+    std::string mode               = "manual";
     uint32_t    expires_in_seconds = DEFAULT_OVERRIDE_SECONDS;
     bool        parseSuccess       = true;
     bool        tooLarge           = false;
+    bool        hasLatestSensors   = true;
+    SensorReadings latestSensors   = {false, 1000, false, 24.0f, 40.0f, true};
 };
+
+void computeControlLogic(const SensorReadings& sensors, ActuatorState& actuators);
 
 CmdResult applyParsedCommand(const ParsedCommand& cmd, ManualOverride& ovr,
                              ActuatorState& actuators, unsigned long nowMs) {
@@ -118,8 +130,15 @@ CmdResult applyParsedCommand(const ParsedCommand& cmd, ManualOverride& ovr,
 
     if (targetAuto) {
         ovr = ManualOverride();
+        if (cmd.hasLatestSensors) {
+            computeControlLogic(cmd.latestSensors, actuators);
+        } else {
+            actuators = {false, false, false};
+        }
         return CmdResult::RETURNED_TO_AUTOMATIC;
     }
+
+    if (cmd.mode != "manual") return CmdResult::INVALID_MODE;
 
     const bool actionOn  = (cmd.action == "on");
     const bool actionOff = (cmd.action == "off");
@@ -127,7 +146,7 @@ CmdResult applyParsedCommand(const ParsedCommand& cmd, ManualOverride& ovr,
     if (!actionOn && !actionOff) return CmdResult::INVALID_ACTION;
 
     uint32_t expiry = cmd.expires_in_seconds;
-    if (expiry == 0) expiry = DEFAULT_OVERRIDE_SECONDS;
+    if (expiry == 0 || expiry > MAX_OVERRIDE_SECONDS) expiry = DEFAULT_OVERRIDE_SECONDS;
 
     if (targetAll) {
         if (!actionOff) return CmdResult::INVALID_ACTION_FOR_ALL;
@@ -142,6 +161,17 @@ CmdResult applyParsedCommand(const ParsedCommand& cmd, ManualOverride& ovr,
     }
 
     const bool desiredState = actionOn;
+    if (desiredState && (targetFan || targetAc)) {
+        if (!cmd.hasLatestSensors) return CmdResult::SENSOR_DATA_UNAVAILABLE;
+        if (!cmd.latestSensors.dhtValid) return CmdResult::DHT_INVALID;
+    }
+
+    ovr = ManualOverride();
+    if (cmd.hasLatestSensors) {
+        computeControlLogic(cmd.latestSensors, actuators);
+    } else {
+        actuators = {false, false, false};
+    }
     ovr.mode       = ControlMode::MANUAL_OVERRIDE;
     ovr.startMs    = nowMs;
     ovr.durationMs = static_cast<unsigned long>(expiry) * 1000UL;
@@ -479,58 +509,109 @@ int main() {
     // ============================================================
     std::cout << "\n--- Real-World MQTT Payload Normalization Tests ---\n";
 
-    // 21. Standard JSON payload parsing
+    // 27. Standard JSON payload parsing
     {
         std::string raw = "{\"schema_version\":1,\"command_id\":\"cmd-021\",\"device_id\":\"room-1\",\"target\":\"light\",\"action\":\"off\",\"mode\":\"manual\",\"expires_in_seconds\":60}";
         ParsedCommand cmd;
         bool parsed = parseRawPayload((const uint8_t*)raw.c_str(), raw.length(), cmd);
-        checkBool("21. Standard JSON parsed successfully", true, parsed);
-        checkBool("21. Command ID extracted accurately", true, cmd.command_id == "cmd-021");
+        checkBool("27. Standard JSON parsed successfully", true, parsed);
+        checkBool("27. Command ID extracted accurately", true, cmd.command_id == "cmd-021");
     }
 
-    // 22. Escaped quotes JSON (PowerShell/CMD literal backslashes)
+    // 28. Escaped quotes JSON (PowerShell/CMD literal backslashes)
     {
         std::string raw = "{\\\"schema_version\\\":1,\\\"command_id\\\":\\\"cmd-022\\\",\\\"device_id\\\":\\\"room-1\\\",\\\"target\\\":\\\"fan\\\",\\\"action\\\":\\\"on\\\",\\\"mode\\\":\\\"manual\\\",\\\"expires_in_seconds\\\":30}";
         ParsedCommand cmd;
         bool parsed = parseRawPayload((const uint8_t*)raw.c_str(), raw.length(), cmd);
-        checkBool("22. Escaped quotes JSON normalized and parsed", true, parsed);
-        checkBool("22. Target extracted from unescaped JSON", true, cmd.target == "fan");
+        checkBool("28. Escaped quotes JSON normalized and parsed", true, parsed);
+        checkBool("28. Target extracted from unescaped JSON", true, cmd.target == "fan");
     }
 
-    // 23. Outer single quotes: '{"..."}'
+    // 29. Outer single quotes: '{"..."}'
     {
         std::string raw = "'{\"schema_version\":1,\"command_id\":\"cmd-023\",\"device_id\":\"room-1\",\"target\":\"ac\",\"action\":\"on\",\"mode\":\"manual\",\"expires_in_seconds\":45}'";
         ParsedCommand cmd;
         bool parsed = parseRawPayload((const uint8_t*)raw.c_str(), raw.length(), cmd);
-        checkBool("23. Outer single quotes stripped and parsed", true, parsed);
-        checkBool("23. Target extracted accurately", true, cmd.target == "ac");
+        checkBool("29. Outer single quotes stripped and parsed", true, parsed);
+        checkBool("29. Target extracted accurately", true, cmd.target == "ac");
     }
 
-    // 24. Outer double quotes + escaped quotes: "{\"..."}"
+    // 30. Outer double quotes + escaped quotes: "{\"..."}"
     {
         std::string raw = "\"{\\\"schema_version\\\":1,\\\"command_id\\\":\\\"cmd-024\\\",\\\"device_id\\\":\\\"room-1\\\",\\\"target\\\":\\\"all\\\",\\\"action\\\":\\\"off\\\",\\\"mode\\\":\\\"manual\\\",\\\"expires_in_seconds\":60}\"";
         ParsedCommand cmd;
         bool parsed = parseRawPayload((const uint8_t*)raw.c_str(), raw.length(), cmd);
-        checkBool("24. Quoted string unwrapped and parsed", true, parsed);
-        checkBool("24. Target 'all' identified", true, cmd.target == "all");
+        checkBool("30. Quoted string unwrapped and parsed", true, parsed);
+        checkBool("30. Target 'all' identified", true, cmd.target == "all");
     }
 
-    // 25. Trailing whitespace / CRLF
+    // 31. Trailing whitespace / CRLF
     {
         std::string raw = " \r\n  {\"schema_version\":1,\"command_id\":\"cmd-025\",\"device_id\":\"room-1\",\"target\":\"automatic\",\"action\":\"off\"}  \n\r ";
         ParsedCommand cmd;
         bool parsed = parseRawPayload((const uint8_t*)raw.c_str(), raw.length(), cmd);
-        checkBool("25. Whitespace and CRLF trimmed cleanly", true, parsed);
-        checkBool("25. Target 'automatic' extracted", true, cmd.target == "automatic");
+        checkBool("31. Whitespace and CRLF trimmed cleanly", true, parsed);
+        checkBool("31. Target 'automatic' extracted", true, cmd.target == "automatic");
     }
 
-    // 26. Malformed JSON returns false
+    // 32. Malformed JSON returns false
     {
         std::string raw = "{ this is definitely not valid json }";
         ParsedCommand cmd;
         bool parsed = parseRawPayload((const uint8_t*)raw.c_str(), raw.length(), cmd);
-        checkBool("26. Truly invalid JSON correctly rejected", false, parsed);
+        checkBool("32. Truly invalid JSON correctly rejected", false, parsed);
     }
+
+    // Additional command-safety and override replacement tests
+    // 21. Non-automatic targets require manual mode
+    ovr = ManualOverride(); act = {false, false, false};
+    ParsedCommand c21 = makeCmd("cmd-021", "room-1", "light", "on");
+    c21.mode = "unsupported";
+    result = applyParsedCommand(c21, ovr, act, 21000);
+    checkResult("21. Invalid control mode rejected", CmdResult::INVALID_MODE, result);
+
+    // 22. Climate ON is rejected until a validated sensor sample exists
+    ovr = ManualOverride(); act = {false, false, false};
+    ParsedCommand c22 = makeCmd("cmd-022", "room-1", "fan", "on");
+    c22.hasLatestSensors = false;
+    result = applyParsedCommand(c22, ovr, act, 22000);
+    checkResult("22. Fan ON without sensor data rejected", CmdResult::SENSOR_DATA_UNAVAILABLE, result);
+    checkBool("22. Fan remains OFF", false, act.fanOn);
+
+    // 23. Climate ON is rejected immediately when DHT22 is invalid
+    ovr = ManualOverride(); act = {false, false, false};
+    ParsedCommand c23 = makeCmd("cmd-023", "room-1", "ac", "on");
+    c23.latestSensors.dhtValid = false;
+    result = applyParsedCommand(c23, ovr, act, 23000);
+    checkResult("23. AC ON with invalid DHT rejected", CmdResult::DHT_INVALID, result);
+    checkBool("23. AC remains OFF", false, act.acOn);
+
+    // 24. Return-to-automatic recomputes outputs before acknowledgement
+    ovr = ManualOverride(); ovr.mode = ControlMode::MANUAL_OVERRIDE; act = {true, false, false};
+    ParsedCommand c24 = makeCmd("cmd-024", "room-1", "automatic", "");
+    c24.latestSensors = {false, 3000, true, 35.0f, 60.0f, true};
+    result = applyParsedCommand(c24, ovr, act, 24000);
+    checkResult("24. Return-to-automatic accepted", CmdResult::RETURNED_TO_AUTOMATIC, result);
+    checkBool("24. Automatic state applied before result", false, act.lightOn);
+
+    // 25. Excessive override duration falls back to the configured default
+    ovr = ManualOverride(); act = {false, false, false};
+    result = applyParsedCommand(makeCmd("cmd-025", "room-1", "light", "on", 4000000000U), ovr, act, 25000);
+    checkResult("25. Command with excessive duration accepted safely", CmdResult::ACCEPTED, result);
+    checkBool("25. Excessive duration replaced with default", true,
+              ovr.durationMs == DEFAULT_OVERRIDE_SECONDS * 1000UL);
+
+    // 26. A new command replaces older channel overrides and restores unselected outputs
+    ovr = ManualOverride(); act = {true, false, false};
+    ParsedCommand c26a = makeCmd("cmd-026a", "room-1", "light", "on", 60);
+    c26a.latestSensors = {true, 2500, true, 30.0f, 50.0f, true};
+    applyParsedCommand(c26a, ovr, act, 26000);
+    ParsedCommand c26b = makeCmd("cmd-026b", "room-1", "fan", "off", 60);
+    c26b.latestSensors = c26a.latestSensors;
+    result = applyParsedCommand(c26b, ovr, act, 27000);
+    checkResult("26. Replacement override accepted", CmdResult::ACCEPTED, result);
+    checkBool("26. Previous light override flag cleared", false, ovr.lightActive);
+    checkBool("26. Unselected light follows automatic rules", true, act.lightOn);
 
     std::cout << "------------------------------------------------------------\n";
     std::cout << "Results: " << g_passed << " / " << (g_passed + g_failed) << " tests passed.\n";
