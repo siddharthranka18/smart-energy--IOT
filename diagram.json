@@ -16,7 +16,7 @@
       "top": -40,
       "left": 240,
       "attrs": {
-        "color": "red",
+        "color": "yellow",
         "label": "Room Light"
       }
     },
@@ -105,7 +105,7 @@
       "top": -50,
       "left": 300,
       "attrs": {
-        "text": "LIGHT LOAD (Red LED - GPIO 2)"
+        "text": "LIGHT LOAD (Yellow LED - GPIO 2)"
       }
     },
     {

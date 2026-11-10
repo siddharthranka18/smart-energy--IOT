@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # IoT-Based Intelligent Energy Management System
 
 An embedded IoT energy management and climate automation prototype designed for academic engineering demonstration. The system dynamically controls simulated lighting and multi-stage cooling appliances based on physical room occupancy, ambient lux/illumination levels, and temperature thresholds to minimize idle power waste.
@@ -68,65 +67,44 @@ The firmware operates on a priority decision matrix defined in [`src/main.cpp`](
 
 ## 🚀 Quick Start Guide
 
-### 1. Build the Firmware
-Using the PlatformIO CLI:
+### 1. Prerequisites
+- [Git](https://git-scm.com/downloads)
+- [Antigravity IDE](https://antigravity.google/) or VS Code
+- [PlatformIO IDE extension](https://platformio.org/install/ide) or `platformio` CLI (`pip install platformio`)
+- [Wokwi Simulator extension](https://marketplace.visualstudio.com/items?itemName=Wokwi.wokwi-vscode)
+
+### 2. Build the Firmware
+Run the included build script:
+```powershell
+.\build.bat
+```
+Or directly using PlatformIO CLI:
 ```powershell
 pio run
 ```
-Or with custom environment path:
+
+### 3. Run Automated Logic Verification
+Run the offline C++ verification test suite:
 ```powershell
-& "$env:USERPROFILE\.platformio\penv\Scripts\pio.exe" run
+.\verify.bat
 ```
 
-### 2. Launch Simulation in VS Code
+### 4. Launch Simulation in Wokwi
 1. Open [`diagram.json`](diagram.json).
 2. Press `F1` and select **Wokwi: Start Simulator** (or click the green Play button on the editor).
 3. Connect the Serial Monitor at **115200 baud**.
 
-### 3. Detailed Self-Verification
+### 5. Detailed Verification
 Refer to [`PHASE_1_VERIFICATION.md`](PHASE_1_VERIFICATION.md) for full step-by-step interactive testing procedures, serial log samples, boundary condition testing, and automated test suite execution.
-=======
-# Smart Energy Management System
 
-An IoT-based energy management prototype using ESP32, Wokwi simulation, and PlatformIO. The current version contains a basic ESP32 firmware and LED simulation. Sensors, backend, and dashboard will be added in later stages.
+---
 
-## Setup Instructions
+## 📋 Project Roadmap & Status
 
-### 1. Prerequisites
-- [Git](https://git-scm.com/downloads)
-- [Antigravity IDE](https://antigravity.google/) or a compatible VS Code-based IDE
-- [PlatformIO IDE extension](https://platformio.org/install/ide)
-- [Wokwi Simulator extension](https://marketplace.visualstudio.com/items?itemName=Wokwi.wokwi-vscode)
-- A valid Wokwi license if prompted
-
-### 2. Clone the Repository
-
-```bash
-git clone <YOUR_GITHUB_REPOSITORY_URL>
-cd smart-energy-management
-```
-
-### 3. Build the Firmware
-
-Open the project folder in your IDE and run this command in the terminal:
-
-```bash
-pio run
-```
-
-### 4. Run the Wokwi Simulation
-
-Open `diagram.json` in the IDE and start the simulation using the green **Play** button. The project uses `wokwi.toml` to locate the compiled ESP32 firmware.
-
-**Note:** The current prototype is a simulation. It does not measure real electrical power or control physical appliances.
-
-## Project Status
-
-- [x] ESP32 firmware build
-- [x] Basic LED simulation
-- [ ] Sensor integration
-- [ ] MQTT communication
-- [ ] Python backend and database
-- [ ] Web dashboard
-
->>>>>>> dc293b1cc1a3f3dd6f6adc7ed35573736b72f0c8
+- [x] Phase 1: ESP32 firmware build & logic control
+- [x] Phase 1: Wokwi simulated circuit (PIR, LDR, DHT22, LEDs)
+- [x] Phase 1: Automated logic verification test suite (12/12 tests passing)
+- [ ] Phase 2: Sensor integration & telemetry hardening
+- [ ] Phase 3: MQTT communication & broker integration
+- [ ] Phase 4: Python backend (FastAPI) and PostgreSQL database
+- [ ] Phase 5: Web monitoring dashboard (React / Vite)
