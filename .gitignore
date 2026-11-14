@@ -4,3 +4,7 @@
 .vscode/launch.json
 .vscode/ipch
 *.exe
+__pycache__/
+*.py[cod]
+logs/
+*.jsonl

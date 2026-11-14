@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 echo ========================================================
-echo Running Automated Logic Verification Suite (Phase 1 + 2)
+echo Running Automated Logic Verification Suite (Phase 1 + 2 + 3)
 echo ========================================================
 
 where g++ >nul 2>nul
@@ -41,4 +41,31 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo [ALL PASS] All Phase 1 and Phase 2 tests passed cleanly!
+echo [Phase 3] Compiling and running power, energy, and alert tests...
+%GPP% -std=c++11 test\verify_phase3_logic.cpp -o test\verify_phase3_logic.exe
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Failed to compile test\verify_phase3_logic.cpp
+    exit /b 1
+)
+test\verify_phase3_logic.exe
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Phase 3 C++ tests failed!
+    exit /b 1
+)
+
+echo.
+echo [Phase 3] Running telemetry ingestion validation tests...
+python --version >nul 2>nul
+if %ERRORLEVEL% equ 0 (
+    python -m unittest -v test.test_phase3_ingestion
+) else (
+    py -3 -m unittest -v test.test_phase3_ingestion
+)
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Phase 3 Python tests failed!
+    exit /b 1
+)
+
+echo.
+echo [ALL PASS] All Phase 1, Phase 2, and Phase 3 tests passed cleanly!
+exit /b 0

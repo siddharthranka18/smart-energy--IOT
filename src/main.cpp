@@ -1,16 +1,18 @@
 /**
  * ============================================================================
  * Project      : IoT-Based Intelligent Energy Management System
- * Phase        : 2 — Wi-Fi Connectivity & MQTT Telemetry / Commands
+ * Phase        : 3 — Energy Measurement, Telemetry Ingestion & Alerts
  * Platform     : ESP32 Dev Module (Wokwi Simulation & Hardware)
  * Description  : Phase 1: Sensor acquisition, deterministic energy control,
  *                fail-safe actuator output, structured serial telemetry.
  *                Phase 2: Wi-Fi connectivity, MQTT telemetry publishing,
  *                MQTT command reception, manual override with expiry, LWT,
  *                command acknowledgements, automatic reconnection.
+ *                Phase 3: Simulated current sensing, load-based power model,
+ *                accumulated energy/cost, and energy-waste alerts.
  * ============================================================================
- * SCOPE NOTE: No FastAPI, PostgreSQL, React, dashboard, analytics, power
- *             metering, or multi-room simulation is implemented in this phase.
+ * SCOPE NOTE: No PostgreSQL, dashboard, or advanced predictive analytics is
+ *             implemented in this phase. Energy state resets after reboot.
  *             Public MQTT on port 1883 is unencrypted — for demonstration only.
  * ============================================================================
  */
@@ -31,6 +33,7 @@ constexpr uint8_t PIN_AC_LED    = 5;   // Simulated AC LED
 constexpr uint8_t PIN_PIR       = 14;  // PIR Motion Sensor OUT
 constexpr uint8_t PIN_DHT       = 15;  // DHT22 Data Bus (single-wire)
 constexpr uint8_t PIN_LDR       = 34;  // LDR Module Analog Output (ADC1_CH6)
+constexpr uint8_t PIN_CURRENT   = 35;  // Potentiometer simulating current sensor (ADC1_CH7)
 
 // ============================================================================
 // PHASE 1 — Control Thresholds & Calibration Constants (unchanged)
@@ -55,20 +58,33 @@ static const char*      MQTT_BROKER             = "broker.hivemq.com"; // Public
 constexpr uint16_t      MQTT_PORT               = 1883;
 static const char*      DEVICE_ID               = "room-1";
 static const char*      TOPIC_PREFIX            = "smart-energy-demo/siddharthranka18-smart-energy-2026";
-static const char*      FIRMWARE_VERSION        = "2.1.0";
+static const char*      FIRMWARE_VERSION        = "3.0.0";
 
 constexpr unsigned long MQTT_RECONNECT_INTERVAL_MS = 5000UL;       // Reconnect retry interval
 constexpr uint32_t      DEFAULT_OVERRIDE_SECONDS   = 60;           // Default manual override duration
 constexpr uint32_t      MAX_OVERRIDE_SECONDS       = 3600;         // Reject excessive/overflow-prone durations
 constexpr int           MQTT_SCHEMA_VERSION        = 1;            // Message schema version
 constexpr int           MQTT_MAX_PAYLOAD_BYTES     = 512;          // Reject oversized payloads
-constexpr int           MQTT_BUFFER_BYTES          = 768;          // Payload + topic + MQTT framing headroom
+constexpr int           MQTT_BUFFER_BYTES          = 1024;         // Extended Phase 3 telemetry + MQTT framing
+
+// ============================================================================
+// PHASE 3 — Electrical Model & Alert Thresholds
+// ============================================================================
+constexpr float SUPPLY_VOLTAGE_V              = 230.0f;
+constexpr float LIGHT_RATED_POWER_W           = 20.0f;
+constexpr float FAN_RATED_POWER_W             = 75.0f;
+constexpr float AC_RATED_POWER_W              = 1500.0f;
+constexpr float CURRENT_SENSOR_MAX_A          = 10.0f;
+constexpr float ENERGY_TARIFF_INR_PER_KWH     = 8.0f;
+constexpr float HIGH_POWER_THRESHOLD_W        = 1800.0f;
+constexpr float UNOCCUPIED_POWER_THRESHOLD_W  = 10.0f;
 
 // Dynamically generated topic strings
 static char TOPIC_TELEMETRY[128];
 static char TOPIC_STATE    [128];
 static char TOPIC_COMMAND  [128];
 static char TOPIC_STATUS   [128];
+static char TOPIC_ALERT    [128];
 static char MQTT_CLIENT_ID [ 64];
 
 // ============================================================================
@@ -94,6 +110,21 @@ struct ActuatorState {
     bool lightOn;           // Room Light state
     bool fanOn;             // Fan state
     bool acOn;              // AC state
+};
+
+struct EnergyMetrics {
+    int   currentSensorRaw = 0;
+    bool  sensorValid = true;
+    float voltageV = SUPPLY_VOLTAGE_V;
+    float modeledPowerW = 0.0f;
+    float sensorCurrentA = 0.0f;
+    float currentA = 0.0f;
+    float powerW = 0.0f;
+    double energyWh = 0.0;
+    double energyKwh = 0.0;
+    double estimatedCostInr = 0.0;
+    bool highPowerAlert = false;
+    bool unoccupiedPowerAlert = false;
 };
 
 // ============================================================================
@@ -124,6 +155,12 @@ static unsigned long  g_lastMqttReconnectMs = 0;
 static SensorReadings g_lastSensors{};
 static ActuatorState  g_lastActuators{};
 static bool           g_haveSensorReadings   = false;
+static EnergyMetrics  g_energy{};
+static unsigned long  g_lastEnergyUpdateMs   = 0;
+static bool           g_haveEnergySample     = false;
+static bool           g_lastHighPowerAlert   = false;
+static bool           g_lastUnoccupiedAlert  = false;
+static bool           g_alertStateInitialized = false;
 
 // ============================================================================
 // Forward Function Declarations
@@ -131,14 +168,18 @@ static bool           g_haveSensorReadings   = false;
 void readSensors(SensorReadings &sensors);
 void computeControlLogic(const SensorReadings &sensors, ActuatorState &actuators);
 void applyActuators(const ActuatorState &actuators);
-void printStatus(const SensorReadings &sensors, const ActuatorState &actuators);
+void computeEnergyMetrics(const SensorReadings &sensors, const ActuatorState &actuators,
+                          int currentSensorRaw, unsigned long nowMs, EnergyMetrics &energy);
+void printStatus(const SensorReadings &sensors, const ActuatorState &actuators, const EnergyMetrics &energy);
 
 void buildTopicNames();
 void maintainWiFiConnection();
 void maintainMqttConnection();
 void onMqttMessage(char* topic, byte* payload, unsigned int length);
-void publishTelemetry(const SensorReadings &sensors, const ActuatorState &actuators);
+void publishTelemetry(const SensorReadings &sensors, const ActuatorState &actuators, const EnergyMetrics &energy);
 void publishDeviceStatus(bool online);
+void publishEnergyAlerts(const EnergyMetrics &energy);
+void publishEnergyAlert(const char* code, bool active, float powerW);
 void publishCommandResult(const char* commandId, bool accepted, const char* reason, const ActuatorState* actuators = nullptr);
 void parseAndApplyCommand(const byte* payload, unsigned int length, ActuatorState &currentActuators);
 void clearManualOverride();
@@ -161,6 +202,7 @@ void setup() {
 
     pinMode(PIN_PIR, INPUT);
     pinMode(PIN_LDR, INPUT);
+    pinMode(PIN_CURRENT, INPUT);
 
     // Safe initial output state: all loads OFF
     digitalWrite(PIN_LIGHT_LED, LOW);
@@ -172,8 +214,8 @@ void setup() {
 
     Serial.println();
     Serial.println("==================================================");
-    Serial.println("  IoT Intelligent Energy Management System (Phase 2)");
-    Serial.println("  ESP32 Firmware Initialized with Wi-Fi & MQTT");
+    Serial.println("  IoT Intelligent Energy Management System (Phase 3)");
+    Serial.println("  ESP32 Energy Metering, Wi-Fi, MQTT & Alerts");
     Serial.println("==================================================");
     Serial.println();
 
@@ -186,6 +228,7 @@ void setup() {
     Serial.print("[MQTT] Client ID   : "); Serial.println(MQTT_CLIENT_ID);
     Serial.print("[MQTT] Telemetry   : "); Serial.println(TOPIC_TELEMETRY);
     Serial.print("[MQTT] Command     : "); Serial.println(TOPIC_COMMAND);
+    Serial.print("[MQTT] Alerts      : "); Serial.println(TOPIC_ALERT);
     Serial.println();
 
     // Start Wi-Fi asynchronously
@@ -237,12 +280,16 @@ void loop() {
         applyActuators(actuators);
         g_lastActuators = actuators;
 
-        // 5. Output structured serial diagnostics
-        printStatus(sensors, actuators);
+        // 5. Read the simulated current channel and accumulate Phase 3 energy
+        computeEnergyMetrics(sensors, actuators, analogRead(PIN_CURRENT), currentMs, g_energy);
 
-        // 6. Publish MQTT telemetry if connected
+        // 6. Output structured serial diagnostics
+        printStatus(sensors, actuators, g_energy);
+
+        // 7. Publish MQTT telemetry and alert transitions if connected
         if (mqttClient.connected()) {
-            publishTelemetry(sensors, actuators);
+            publishTelemetry(sensors, actuators, g_energy);
+            publishEnergyAlerts(g_energy);
         }
     }
 }
@@ -259,6 +306,7 @@ void buildTopicNames() {
     snprintf(TOPIC_STATE,     sizeof(TOPIC_STATE),     "%s/%s/state",     TOPIC_PREFIX, DEVICE_ID);
     snprintf(TOPIC_COMMAND,   sizeof(TOPIC_COMMAND),   "%s/%s/command",   TOPIC_PREFIX, DEVICE_ID);
     snprintf(TOPIC_STATUS,    sizeof(TOPIC_STATUS),    "%s/%s/status",    TOPIC_PREFIX, DEVICE_ID);
+    snprintf(TOPIC_ALERT,     sizeof(TOPIC_ALERT),     "%s/%s/alert",     TOPIC_PREFIX, DEVICE_ID);
 }
 
 void maintainWiFiConnection() {
@@ -355,10 +403,10 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
     parseAndApplyCommand(payload, length, current);
 }
 
-void publishTelemetry(const SensorReadings &sensors, const ActuatorState &actuators) {
+void publishTelemetry(const SensorReadings &sensors, const ActuatorState &actuators, const EnergyMetrics &energy) {
     g_sequenceNumber++;
 
-    StaticJsonDocument<384> doc;
+    StaticJsonDocument<768> doc;
     doc["schema_version"]   = MQTT_SCHEMA_VERSION;
     doc["message_type"]     = "telemetry";
     doc["device_id"]        = DEVICE_ID;
@@ -382,8 +430,20 @@ void publishTelemetry(const SensorReadings &sensors, const ActuatorState &actuat
     doc["fan_on"]       = actuators.fanOn;
     doc["ac_on"]        = actuators.acOn;
     doc["control_mode"] = controlModeString();
+    doc["current_sensor_raw"] = energy.currentSensorRaw;
+    doc["power_sensor_valid"] = energy.sensorValid;
+    doc["voltage_v"]          = energy.voltageV;
+    doc["sensor_current_a"]   = energy.sensorCurrentA;
+    doc["current_a"]          = energy.currentA;
+    doc["load_model_power_w"] = energy.modeledPowerW;
+    doc["power_w"]            = energy.powerW;
+    doc["energy_wh"]          = energy.energyWh;
+    doc["energy_kwh"]         = energy.energyKwh;
+    doc["estimated_cost_inr"] = energy.estimatedCostInr;
+    doc["high_power_alert"]   = energy.highPowerAlert;
+    doc["unoccupied_power_alert"] = energy.unoccupiedPowerAlert;
 
-    char buffer[384];
+    char buffer[768];
     serializeJson(doc, buffer, sizeof(buffer));
 
     bool ok = mqttClient.publish(TOPIC_TELEMETRY, buffer, false);
@@ -737,6 +797,77 @@ const char* controlModeString() {
 }
 
 // ============================================================================
+// PHASE 3 — Energy Measurement & Alert Implementation
+// ============================================================================
+
+void computeEnergyMetrics(const SensorReadings &sensors, const ActuatorState &actuators,
+                          int currentSensorRaw, unsigned long nowMs, EnergyMetrics &energy) {
+    energy.currentSensorRaw = currentSensorRaw;
+    energy.sensorValid = (currentSensorRaw >= 0 && currentSensorRaw <= 4095);
+    energy.voltageV = SUPPLY_VOLTAGE_V;
+
+    energy.modeledPowerW = 0.0f;
+    if (actuators.lightOn) energy.modeledPowerW += LIGHT_RATED_POWER_W;
+    if (actuators.fanOn)   energy.modeledPowerW += FAN_RATED_POWER_W;
+    if (actuators.acOn)    energy.modeledPowerW += AC_RATED_POWER_W;
+
+    if (energy.sensorValid) {
+        energy.sensorCurrentA = (static_cast<float>(currentSensorRaw) / 4095.0f) * CURRENT_SENSOR_MAX_A;
+    } else {
+        energy.sensorCurrentA = 0.0f;
+    }
+
+    const float sensorPowerW = energy.voltageV * energy.sensorCurrentA;
+    energy.powerW = max(energy.modeledPowerW, sensorPowerW);
+    energy.currentA = energy.powerW / energy.voltageV;
+
+    // Unsigned subtraction remains correct across millis() rollover.
+    if (g_haveEnergySample) {
+        const unsigned long elapsedMs = nowMs - g_lastEnergyUpdateMs;
+        energy.energyWh += static_cast<double>(energy.powerW) *
+                           static_cast<double>(elapsedMs) / 3600000.0;
+    }
+    g_lastEnergyUpdateMs = nowMs;
+    g_haveEnergySample = true;
+
+    energy.energyKwh = energy.energyWh / 1000.0;
+    energy.estimatedCostInr = energy.energyKwh * ENERGY_TARIFF_INR_PER_KWH;
+    energy.highPowerAlert = energy.powerW >= HIGH_POWER_THRESHOLD_W;
+    energy.unoccupiedPowerAlert = !sensors.occupied &&
+                                  energy.powerW >= UNOCCUPIED_POWER_THRESHOLD_W;
+}
+
+void publishEnergyAlert(const char* code, bool active, float powerW) {
+    StaticJsonDocument<320> doc;
+    doc["schema_version"] = MQTT_SCHEMA_VERSION;
+    doc["message_type"] = "energy_alert";
+    doc["device_id"] = DEVICE_ID;
+    doc["firmware_version"] = FIRMWARE_VERSION;
+    doc["alert_code"] = code;
+    doc["active"] = active;
+    doc["severity"] = (strcmp(code, "power_in_unoccupied_room") == 0) ? "warning" : "high";
+    doc["power_w"] = powerW;
+    doc["uptime_ms"] = millis();
+
+    char buffer[320];
+    serializeJson(doc, buffer, sizeof(buffer));
+    const bool ok = mqttClient.publish(TOPIC_ALERT, buffer, false);
+    Serial.printf("[ALERT] %s %s (%s)\n", code, active ? "ACTIVE" : "CLEARED", ok ? "published" : "publish failed");
+}
+
+void publishEnergyAlerts(const EnergyMetrics &energy) {
+    if (!g_alertStateInitialized || energy.highPowerAlert != g_lastHighPowerAlert) {
+        publishEnergyAlert("high_power_consumption", energy.highPowerAlert, energy.powerW);
+        g_lastHighPowerAlert = energy.highPowerAlert;
+    }
+    if (!g_alertStateInitialized || energy.unoccupiedPowerAlert != g_lastUnoccupiedAlert) {
+        publishEnergyAlert("power_in_unoccupied_room", energy.unoccupiedPowerAlert, energy.powerW);
+        g_lastUnoccupiedAlert = energy.unoccupiedPowerAlert;
+    }
+    g_alertStateInitialized = true;
+}
+
+// ============================================================================
 // PHASE 1 — Modular Implementation Functions (unchanged logic)
 // ============================================================================
 
@@ -813,7 +944,7 @@ void applyActuators(const ActuatorState &actuators) {
 /**
  * Transmits structured status update to the Serial monitor every 2 seconds.
  */
-void printStatus(const SensorReadings &sensors, const ActuatorState &actuators) {
+void printStatus(const SensorReadings &sensors, const ActuatorState &actuators, const EnergyMetrics &energy) {
     static unsigned long cycleCount = 0;
     cycleCount++;
 
@@ -896,6 +1027,19 @@ void printStatus(const SensorReadings &sensors, const ActuatorState &actuators) 
         Serial.println(" (Triggered - Temp >= 32.0 C)");
     } else {
         Serial.println(" (Idle - Temp < 32.0 C)");
+    }
+
+    Serial.println("Electrical Metrics:");
+    Serial.printf("  - Current Sensor : Raw %d | %.3f A\n", energy.currentSensorRaw, energy.sensorCurrentA);
+    Serial.printf("  - Load Model     : %.1f W\n", energy.modeledPowerW);
+    Serial.printf("  - Active Power   : %.1f W at %.1f V\n", energy.powerW, energy.voltageV);
+    Serial.printf("  - Total Energy   : %.4f Wh (%.6f kWh)\n", energy.energyWh, energy.energyKwh);
+    Serial.printf("  - Estimated Cost : INR %.4f\n", energy.estimatedCostInr);
+    if (energy.highPowerAlert) {
+        Serial.println("  - ALERT          : HIGH POWER CONSUMPTION");
+    }
+    if (energy.unoccupiedPowerAlert) {
+        Serial.println("  - ALERT          : POWER DRAW IN UNOCCUPIED ROOM");
     }
 
     // Sensor Diagnostics

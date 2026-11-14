@@ -1,25 +1,31 @@
 # IoT-Based Intelligent Energy Management System
 
-An embedded IoT energy management and climate automation prototype designed for academic engineering demonstration. The system dynamically controls simulated lighting and multi-stage cooling appliances based on physical room occupancy, ambient lux/illumination levels, and temperature thresholds to minimize idle power waste, while providing cloud-connected MQTT telemetry and remote manual control.
+An embedded IoT energy management and climate automation prototype designed for academic engineering demonstration. The system controls simulated lighting and cooling, measures power and accumulated energy, estimates cost, detects energy waste, and delivers validated multi-room MQTT telemetry to a Python ingestion service.
 
 ---
 
-## 📌 Phase 1 & 2 System Architecture
+## 📌 Phase 1–3 System Architecture
 
 The architecture bridges edge sensor automation with cloud telemetry and control:
 
 ```
-[Sensors: PIR / LDR / DHT22]
+[Sensors: PIR / LDR / DHT22 / Simulated Current]
             │
             ▼
     [ESP32 Microcontroller]  ◄─── (Wokwi-GUEST Wi-Fi) ───►  [MQTT Broker: HiveMQ]
     - Local Deterministic Rules                                    │
     - Non-blocking Millis Loop                                     │
     - Manual Override State Machine                                │
+    - Power / Energy / Cost Model                                  │
             │                                                      ▼
             │ (GPIO Outputs)                             [Subscribers & Control]
             ▼                                            - Telemetry Stream
     [Actuator LEDs: Light, Fan, AC]                      - Remote Override Commands
+                                                                   │
+                                                                   ▼
+                                                     [Python Ingestion Service]
+                                                     - Schema Validation
+                                                     - Structured Records & Alerts
 ```
 
 ### Subsystem Specifications
@@ -27,6 +33,7 @@ The architecture bridges edge sensor automation with cloud telemetry and control
 - **Occupancy Subsystem**: Digital PIR Motion Sensor (`wokwi-pir-motion-sensor`) on GPIO 14
 - **Lighting Subsystem**: Analog LDR Photoresistor (`wokwi-photoresistor-sensor`) on GPIO 34 & Room Light LED on GPIO 2
 - **Climate Subsystem**: DHT22 Temp & Humidity (`wokwi-dht22`) on GPIO 15, Fan LED on GPIO 4, AC LED on GPIO 5
+- **Energy Subsystem**: Potentiometer current simulator on GPIO 35 (0–10 A) plus rated-load model (Light 20 W, Fan 75 W, AC 1500 W)
 - **Connectivity**: IEEE 802.11b/g/n Wi-Fi (`Wokwi-GUEST`) + MQTT v3.1.1 (`PubSubClient` + `ArduinoJson`)
 - **Telemetry Period**: 2000 ms periodic non-blocking sampling cycle
 
@@ -42,6 +49,7 @@ The architecture bridges edge sensor automation with cloud telemetry and control
 | **PIR Motion Sensor** | `wokwi-pir-motion-sensor` | `OUT` (`VCC`=5V, `GND`=GND) | **GPIO 14** | `INPUT` | Digital Occupancy (HIGH = Motion) |
 | **DHT22 Sensor** | `wokwi-dht22` | `SDA` (`VCC`=3V3, `GND`=GND) | **GPIO 15** | `INPUT_PULLUP` | Single-wire Temp/RH Bus |
 | **LDR Sensor Module** | `wokwi-photoresistor-sensor` | `AO` (`VCC`=3V3, `GND`=GND) | **GPIO 34** | `INPUT` | Analog Illumination (ADC1_CH6) |
+| **Current Simulator** | `wokwi-potentiometer` | `SIG` (`VCC`=3V3, `GND`=GND) | **GPIO 35** | `INPUT` | Simulated 0–10 A current channel (ADC1_CH7) |
 
 ---
 
@@ -103,6 +111,7 @@ The architecture bridges edge sensor automation with cloud telemetry and control
 | `smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/state` | ESP32 ➔ Broker | `false` | Command result acknowledgements |
 | `smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/command` | Broker ➔ ESP32 | `false` | Remote control command ingestion |
 | `smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/status` | ESP32 ➔ Broker | `true` | Node presence beacon (`online`) / LWT (`offline`) |
+| `smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/alert` | ESP32 ➔ Broker | `false` | High-power and empty-room power alert transitions |
 
 ---
 
@@ -114,7 +123,7 @@ The architecture bridges edge sensor automation with cloud telemetry and control
   "schema_version": 1,
   "message_type": "telemetry",
   "device_id": "room-1",
-  "firmware_version": "2.1.0",
+  "firmware_version": "3.0.0",
   "sequence": 14,
   "uptime_ms": 28000,
   "occupied": true,
@@ -126,7 +135,19 @@ The architecture bridges edge sensor automation with cloud telemetry and control
   "light_on": true,
   "fan_on": true,
   "ac_on": false,
-  "control_mode": "automatic"
+  "control_mode": "automatic",
+  "current_sensor_raw": 0,
+  "power_sensor_valid": true,
+  "voltage_v": 230.0,
+  "sensor_current_a": 0.0,
+  "current_a": 0.413,
+  "load_model_power_w": 95.0,
+  "power_w": 95.0,
+  "energy_wh": 12.45,
+  "energy_kwh": 0.01245,
+  "estimated_cost_inr": 0.0996,
+  "high_power_alert": false,
+  "unoccupied_power_alert": false
 }
 ```
 *Note: In the event of a DHT22 sensor read failure, `temperature_c` and `humidity_percent` are serialized as JSON `null` (never invalid `NaN`), and `dht_valid` is set to `false`.*
@@ -157,7 +178,7 @@ The architecture bridges edge sensor automation with cloud telemetry and control
   "schema_version": 1,
   "message_type": "command_result",
   "device_id": "room-1",
-  "firmware_version": "2.1.0",
+  "firmware_version": "3.0.0",
   "command_id": "cmd-001",
   "accepted": true,
   "reason": "command_applied",
@@ -183,9 +204,11 @@ The architecture bridges edge sensor automation with cloud telemetry and control
 ```powershell
 .\verify.bat
 ```
-Executes both test suites offline with GCC/MinGW:
+Executes all offline verification suites:
 - **Phase 1 Suite**: 12/12 unit tests passing (deterministic local rules, edge cases, failsafes)
 - **Phase 2 Suite**: 63/63 assertions passing (payload normalization, command validation, immediate climate safety, override replacement, timer, automatic restoration)
+- **Phase 3 C++ Suite**: 20/20 assertions passing (power model, sensor conversion, energy, cost, rollover, alerts)
+- **Phase 3 Python Suite**: 12/12 tests passing (schema validation, multi-room topics, malformed data, ingestion alerts)
 
 ### 3. Run Simulation in Wokwi
 1. Open [`diagram.json`](diagram.json) in VS Code.
@@ -212,6 +235,13 @@ mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/siddharthranka1
 
 *(Note: The firmware includes built-in payload normalization that automatically unescapes `\"` and strips wrapper quotes, so commands sent via any shell or MQTT tool are parsed reliably.)*
 
+### 5. Run the Phase 3 MQTT Ingestion Service
+```powershell
+python -m pip install -r requirements-phase3.txt
+python -m phase3.ingestion_service
+```
+The service subscribes to `smart-energy-demo/siddharthranka18-smart-energy-2026/+/telemetry`, validates each room payload, adds a UTC reception timestamp, and prints structured accepted/rejected records. Set `TELEMETRY_LOG_PATH` to optionally append JSONL records. No database is introduced until Phase 4.
+
 ---
 
 ## 📋 Project Roadmap & Status
@@ -222,6 +252,9 @@ mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/siddharthranka1
 - [x] **Phase 2**: MQTT telemetry publication, command ingestion, and state acknowledgements
 - [x] **Phase 2**: Time-bounded manual override with automatic fallback and DHT safety enforcement
 - [x] **Phase 2**: Phase 2 logic verification test suite (63/63 assertions passing)
-- [ ] **Phase 3**: Telemetry ingestion service & physical energy metering (voltage/current sensors)
+- [x] **Phase 3**: Simulated current sensing, rated-load power model, accumulated energy and cost
+- [x] **Phase 3**: High-power and unoccupied-room energy alerts over MQTT
+- [x] **Phase 3**: Multi-room MQTT telemetry ingestion, validation and structured logging service
+- [x] **Phase 3**: 20 C++ energy assertions and 12 Python ingestion tests passing
 - [ ] **Phase 4**: Python backend (FastAPI) and PostgreSQL database
 - [ ] **Phase 5**: Web monitoring and control dashboard (React / Vite)
