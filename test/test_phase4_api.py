@@ -1,5 +1,10 @@
+import json
 import os
 import unittest
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, delete, text
@@ -8,7 +13,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from phase4.config import Settings
 from phase4.ingest import ingest_message
 from phase4.main import create_app
-from phase4.models import TelemetrySample
+from phase4.models import ControlAction, TelemetrySample
+from phase4.mqtt_listener import TelemetryListener
 
 
 TOPIC = "smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/telemetry"
@@ -89,6 +95,7 @@ class Phase4ApiTests(unittest.TestCase):
     def setUp(self):
         factory = self.app.state.session_factory
         with factory() as session:
+            session.execute(delete(ControlAction))
             session.execute(delete(TelemetrySample))
             session.commit()
 
@@ -99,6 +106,97 @@ class Phase4ApiTests(unittest.TestCase):
         self.assertEqual(body["database"], "ok")
         self.assertFalse(body["mqtt_enabled"])
         self.assertTrue(body["current_is_simulated"])
+
+    def test_auto_shutoff_requires_correlated_ack_and_fresh_telemetry(self):
+        settings = replace(self.app.state.settings, auto_load_off=True)
+        listener = TelemetryListener(settings, self.app.state.session_factory, self.app.state.status)
+        broker = Mock()
+        broker.publish.return_value.rc = 0
+        prefix = TOPIC.rsplit("/", 1)[0]
+
+        def receive(topic, body, retain=False):
+            listener._on_message(broker, None, SimpleNamespace(
+                topic=topic, payload=json.dumps(body).encode(), retain=retain,
+            ))
+
+        def send(sequence, light_on, retain=False):
+            receive(TOPIC, _payload(sequence=sequence, uptime_ms=2000 * sequence,
+                occupied=False, light_on=light_on, fan_on=False,
+                power_w=20 if light_on else 0), retain)
+
+        def action():
+            return self.client.get("/rooms/room-1/control-actions").json()["actions"][0]
+
+        send(1, True, retain=True)
+        broker.publish.assert_not_called()
+        send(2, True)
+        send(3, True)
+        broker.publish.assert_called_once()
+        topic, payload = broker.publish.call_args.args
+        self.assertEqual(topic, prefix + "/command")
+        self.assertEqual(broker.publish.call_args.kwargs, {"qos": 0, "retain": False})
+        command = json.loads(payload)
+        self.assertEqual((command["device_id"], command["target"], command["action"]), ("room-1", "light", "off"))
+        send(4, False)
+        self.assertEqual(action()["status"], "pending")
+        ack = {"schema_version": 1, "message_type": "command_result", "device_id": "room-1",
+               "command_id": command["command_id"], "accepted": True, "light_on": False, "uptime_ms": 10500}
+        receive(prefix + "/state", ack, retain=True)
+        send(5, False)
+        self.assertEqual(action()["status"], "pending")
+        receive(prefix + "/state", ack)
+        self.assertEqual(action()["status"], "pending")
+        send(6, False)
+        result = action()
+        self.assertEqual(result["status"], "confirmed")
+        self.assertEqual((result["before_w"], result["after_w"]), (20, 0))
+
+    def test_shutoff_targets_fan_ac_and_multiple_loads(self):
+        settings = replace(self.app.state.settings, auto_load_off=True)
+        listener = TelemetryListener(settings, self.app.state.session_factory, self.app.state.status)
+        broker = Mock()
+        broker.publish.return_value.rc = 0
+        state_topic = TOPIC.rsplit("/", 1)[0] + "/state"
+
+        def receive(topic, body):
+            listener._on_message(broker, None, SimpleNamespace(
+                topic=topic, payload=json.dumps(body).encode(), retain=False,
+            ))
+
+        for index, target in enumerate(("fan", "ac", "all")):
+            with self.subTest(target=target):
+                seq = index * 3 + 1
+                receive(TOPIC, _payload(sequence=seq, uptime_ms=seq * 2000,
+                    occupied=False, light_on=False, fan_on=target != "ac",
+                    ac_on=target != "fan", power_w=1600))
+                command = json.loads(broker.publish.call_args.args[1])
+                self.assertEqual(command["target"], target)
+                receive(state_topic, {
+                    "schema_version": 1, "message_type": "command_result", "device_id": "room-1",
+                    "command_id": command["command_id"], "accepted": True, "uptime_ms": seq * 2000 + 1,
+                    "light_on": False, "fan_on": False, "ac_on": False,
+                })
+                if target == "all":
+                    receive(TOPIC, _payload(sequence=seq + 1, uptime_ms=(seq + 1) * 2000,
+                        occupied=False, light_on=False, fan_on=False, ac_on=True, power_w=1600))
+                    pending = self.client.get("/rooms/room-1/control-actions").json()["actions"][0]
+                    self.assertEqual(pending["status"], "pending")
+                receive(TOPIC, _payload(sequence=seq + 2, uptime_ms=(seq + 2) * 2000,
+                    occupied=False, light_on=False, fan_on=False, ac_on=False, power_w=25,
+                    unoccupied_power_alert=True))
+                result = self.client.get("/rooms/room-1/control-actions").json()["actions"][0]
+                self.assertEqual((result["target"], result["status"], result["after_w"]), (target, "confirmed", 25))
+        self.assertEqual(broker.publish.call_count, 3)
+
+    def test_pending_action_times_out_without_new_telemetry(self):
+        now = datetime.now(timezone.utc)
+        with self.app.state.session_factory.begin() as session:
+            session.add(ControlAction(command_id="a" * 32, device_id="room-1", status="pending",
+                started_at=now - timedelta(minutes=3), deadline=now - timedelta(minutes=1),
+                before_w=20, before_sequence=1, before_uptime_ms=2000))
+        action = self.client.get("/rooms/room-1/control-actions").json()["actions"][0]
+        self.assertEqual(action["status"], "timed_out")
+        self.assertIsNone(action["after_w"])
 
     def test_missing_room_returns_404_and_bad_id_returns_400(self):
         missing = self.client.get("/rooms/room-1")

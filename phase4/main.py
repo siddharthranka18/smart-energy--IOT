@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
@@ -29,7 +29,12 @@ def _build_engine(database_url: str) -> Any:
 
 
 def init_database(engine: Any) -> None:
-    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        Base.metadata.create_all(connection)
+        connection.execute(text(
+            "ALTER TABLE control_actions ADD COLUMN IF NOT EXISTS "
+            "target VARCHAR(5) NOT NULL DEFAULT 'light'"
+        ))
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

@@ -272,6 +272,22 @@ The API listens on `http://127.0.0.1:8000`. Interactive docs are at `http://127.
 
 ### Run the dashboard locally
 
+#### Demonstrate verified automatic equipment shutoff
+
+Set `AUTO_LOAD_OFF=1` in the root `.env` and restart the backend. Existing `AUTO_LIGHT_OFF=1` settings also enable the expanded rule unless `AUTO_LOAD_OFF` is set. Use a single automation backend for the demo room. On startup the backend upgrades the control history table and preserves existing light actions. Keep Wokwi running with the room unoccupied and the current knob at zero.
+
+To simulate a light left on, publish the following non-retained payload from your MQTT client to the room's command topic. With the default demo namespace, use `smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/command`.
+
+```json
+{"schema_version":1,"command_id":"demo-light-left-on","device_id":"room-1","target":"light","action":"on","mode":"manual","expires_in_seconds":300}
+```
+
+Repeat with `"target":"fan"` or `"target":"ac"` and a new command ID to test each load. Leave the DHT22 enabled and healthy for the fan and AC overrides.
+
+The **Automatic equipment shutoff** panel records which equipment was targeted. The backend sends a single OFF command if one load is on, or an all-off command if several are on. The override expires after 30 simulated seconds. Confirmation requires a matching device acknowledgment and newer telemetry showing every targeted load off. With the current knob at zero, individual tests should show 20 W → 0 W for the light, 75 W → 0 W for the fan, or 1500 W → 0 W for the AC. A separate simulated load can continue drawing power after a confirmed shutoff. Missing verification becomes Timed out after two minutes.
+
+#### Start the local services
+
 1. Start PostgreSQL and the API using [Phase 4 setup](PHASE_4_VERIFICATION.md).
 2. From the project root, run `npm --prefix dashboard ci`, then `npm --prefix dashboard run dev`.
 3. Open the localhost URL printed by Vite and start Wokwi. A room appears after its first reading is stored.

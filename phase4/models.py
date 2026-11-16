@@ -4,12 +4,30 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Double, Index, Integer, String
+from sqlalchemy import BigInteger, Boolean, DateTime, Double, Index, Integer, String, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
     pass
+
+
+class ControlAction(Base):
+    __tablename__ = "control_actions"
+
+    command_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    device_id: Mapped[str] = mapped_column(String(64), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(20))
+    target: Mapped[str] = mapped_column(String(5), server_default=text("'light'"))
+    before_w: Mapped[float] = mapped_column(Double)
+    before_sequence: Mapped[int] = mapped_column(BigInteger)
+    before_uptime_ms: Mapped[int] = mapped_column(BigInteger)
+    ack_uptime_ms: Mapped[int | None] = mapped_column(BigInteger)
+    after_w: Mapped[float | None] = mapped_column(Double)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    detail: Mapped[str | None] = mapped_column(String(100))
 
 
 class TelemetrySample(Base):

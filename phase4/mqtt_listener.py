@@ -8,6 +8,7 @@ import threading
 from typing import Any
 
 from phase4.config import Settings
+from phase4.control import on_ack, on_sample, publish_off, record_failure
 from phase4.ingest import ingest_message
 
 
@@ -100,6 +101,8 @@ class TelemetryListener:
 
     def _on_connect(self, client: Any, userdata: Any, flags: Any, reason_code: Any, properties: Any) -> None:
         if reason_code == 0:
+            if self.settings.auto_load_off:
+                client.subscribe(self.settings.mqtt_topic.rsplit("/", 1)[0] + "/state", qos=0)
             client.subscribe(self.settings.mqtt_topic, qos=1)
             self.status.set_mqtt_connected(True, None)
             logger.info("MQTT connected. Subscribed to %s", self.settings.mqtt_topic)
@@ -115,9 +118,23 @@ class TelemetryListener:
     def _on_message(self, client: Any, userdata: Any, message: Any) -> None:
         # Step 3: Validate and store. Exceptions here must not kill the MQTT loop.
         try:
+            if message.topic.endswith("/state"):
+                if self.settings.auto_load_off and not message.retain:
+                    on_ack(self.session_factory, message.topic, message.payload)
+                return
             outcome = ingest_message(message.topic, message.payload, self.session_factory)
         except Exception:
             logger.exception("Unexpected error while handling a telemetry message")
             self.status.record("database_error")
             return
         self.status.record(outcome.get("status", "database_error"))
+        if not self.settings.auto_load_off or message.retain or outcome["status"] != "stored":
+            return
+        try:
+            command = on_sample(self.session_factory, outcome["id"], client.is_connected())
+            if command:
+                command_id, target = command
+                if publish_off(client, message.topic, command_id, target).rc != 0:
+                    record_failure(self.session_factory, command_id, "MQTT publish failed")
+        except Exception:
+            logger.exception("Could not process automatic load control")

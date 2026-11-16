@@ -52,11 +52,12 @@ function App() {
         const { rooms } = await get('/rooms', controller.signal);
         const id = rooms.some(room => room.device_id === selection) ? selection : rooms[0]?.device_id;
         const path = '/rooms/' + encodeURIComponent(id ?? '');
-        const [room, history] = id ? await Promise.all([
+        const [room, history, control] = id ? await Promise.all([
           get(path, controller.signal),
           get(path + '/telemetry?limit=60', controller.signal),
+          'auto_light_off' in health ? get(path + '/control-actions', controller.signal) : null,
         ]) : [];
-        setData({ health, rooms, room, history, totals: rooms.find(item => item.device_id === id) });
+        setData({ health, rooms, room, history, control, totals: rooms.find(item => item.device_id === id) });
         setError('');
       } catch (failure) {
         if (!controller.signal.aborted) setError(failure.message);
@@ -68,7 +69,7 @@ function App() {
     return () => { controller.abort(); clearTimeout(timer); };
   }, [selection]);
 
-  const { health, rooms = [], room, history, totals } = data ?? {};
+  const { health, rooms = [], room, history, control, totals } = data ?? {};
   const stale = room && Date.now() - Date.parse(room.received_at) > 30000;
   return <main>
     <header>
@@ -109,6 +110,24 @@ function App() {
         {room.unoccupied_power_alert && <p className="warning">Power draw in an unoccupied room</p>}
         {!room.high_power_alert && !room.unoccupied_power_alert && <p>No alerts on this reading.</p>}
       </section>
+      {control && <section className="panel control">
+        <h2>Automatic equipment shutoff</h2>
+        <p>{(health.auto_load_off ?? health.auto_light_off) ? 'Enabled' : 'Disabled'} · Acts when an unoccupied room reports equipment still on.</p>
+        {control.actions.length === 0 && <p>No shutoff actions recorded.</p>}
+        {control.actions.map(action => <article key={action.command_id} className="action">
+          <div className="axis">
+            <strong>{action.reason}</strong>
+            <span className="action-status" data-ok={action.status === 'confirmed'}>
+              {{ pending: 'Pending', confirmed: 'Confirmed', failed: 'Failed', timed_out: 'Timed out' }[action.status]}
+            </span>
+          </div>
+          <p>{time(action.started_at)} · {({ light: 'Light', fan: 'Fan', ac: 'AC', all: 'Light, fan and AC' })[action.target ?? 'light']} off · Before {number(action.before_w)} W
+            {action.after_w != null && ` → After ${number(action.after_w)} W`}
+            {action.finished_at && ` · Result at ${time(action.finished_at)}`}
+          </p>
+          {action.detail && <p>{action.detail}</p>}
+        </article>)}
+      </section>}
     </>}
   </main>;
 }

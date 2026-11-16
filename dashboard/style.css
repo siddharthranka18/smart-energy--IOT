@@ -26,4 +26,7 @@ select { font: inherit; padding: 8px; margin-left: 6px; border: 1px solid #52636
 dl { margin-bottom: 0; }
 dl div { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-top: 1px solid #34444c; }
 .warning { color: #ffd19a; background: #452e1f; padding: 10px 12px; border-radius: 7px; }
+.control { margin-top: 12px; }
+.action { border-top: 1px solid #34444c; margin-top: 12px; }
+.action-status { padding: 5px 8px; border-radius: 7px; }
 @media (max-width: 640px) { .details { grid-template-columns: 1fr; } }

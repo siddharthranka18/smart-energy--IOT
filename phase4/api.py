@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from phase4.config import SIMULATED_MEASUREMENT_NOTE
+from phase4.control import action_status
+from phase4.models import ControlAction
 from phase4.storage import energy_summary, latest_sample, list_rooms, list_samples, sample_to_dict
 
 
@@ -58,6 +61,8 @@ def health(request: Request) -> dict[str, Any]:
         "database": database,
         "database_error": database_error,
         "mqtt_enabled": request.app.state.settings.mqtt_enabled,
+        "auto_light_off": request.app.state.settings.auto_load_off,
+        "auto_load_off": request.app.state.settings.auto_load_off,
         "mqtt_broker": request.app.state.settings.mqtt_broker,
         "mqtt_topic": request.app.state.settings.mqtt_topic,
         **mqtt,
@@ -122,3 +127,24 @@ def alerts(
         "count": len(rows),
         "alerts": [sample_to_dict(row) for row in rows],
     }
+
+
+@router.get("/rooms/{device_id}/control-actions")
+def control_actions(device_id: str, request: Request) -> dict[str, Any]:
+    device_id = _require_device_id(device_id)
+    rows = _run(request, lambda session: list(session.scalars(
+        select(ControlAction).where(ControlAction.device_id == device_id)
+        .order_by(ControlAction.started_at.desc()).limit(10)
+    )))
+    now = datetime.now(timezone.utc)
+    actions = []
+    for row in rows:
+        status = action_status(row, now)
+        actions.append({
+            "command_id": row.command_id, "target": row.target, "status": status,
+            "reason": "Room unoccupied while equipment was on",
+            "started_at": row.started_at,
+            "finished_at": row.deadline if status == "timed_out" else row.finished_at,
+            "before_w": row.before_w, "after_w": row.after_w, "detail": row.detail,
+        })
+    return {"actions": actions}

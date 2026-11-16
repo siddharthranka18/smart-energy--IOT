@@ -34,6 +34,7 @@ class Settings:
     mqtt_enabled: bool
     api_host: str
     api_port: int
+    auto_load_off: bool = False
 
 
 def _flag(name: str, default: str) -> bool:
@@ -51,4 +52,5 @@ def load_settings() -> Settings:
         mqtt_enabled=_flag("MQTT_ENABLED", "1"),
         api_host=os.getenv("API_HOST", "127.0.0.1").strip(),
         api_port=int(os.getenv("API_PORT", "8000")),
+        auto_load_off=_flag("AUTO_LOAD_OFF", os.getenv("AUTO_LIGHT_OFF", "0")),
     )
