@@ -34,6 +34,50 @@ function PowerHistory({ samples }) {
   </section>;
 }
 
+const demoLoads = [
+  { target: 'light', label: 'light', led: 'yellow' },
+  { target: 'fan', label: 'fan', led: 'blue' },
+  { target: 'ac', label: 'AC', led: 'orange' },
+];
+
+function EquipmentDemo({ room, ready, allTargets }) {
+  const [sending, setSending] = useState(null);
+  const [message, setMessage] = useState('');
+  const allOff = !room.light_on && !room.fan_on && !room.ac_on;
+
+  async function start({ target, led }) {
+    setSending(target);
+    setMessage('');
+    try {
+      const intent = `${target}-demo`;
+      const response = await fetch('/api/rooms/' + encodeURIComponent(room.device_id) + '/' + intent, {
+        method: 'POST',
+        headers: { 'X-Demo-Intent': intent },
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(typeof body.detail === 'string' ? body.detail : 'Could not start the equipment demo.');
+      }
+      setMessage(`Demo requested. Watch the ${led} LED, then look for a new Confirmed action below.`);
+    } catch (failure) {
+      setMessage(failure.message);
+    } finally {
+      setSending(null);
+    }
+  }
+
+  return <div className="demo">
+    <div className="demo-buttons">
+      {(allTargets ? demoLoads : demoLoads.slice(0, 1)).map(load =>
+        <button key={load.target} type="button" onClick={() => start(load)}
+          disabled={sending !== null || !ready || room.occupied || !allOff}>
+          {sending === load.target ? 'Sending…' : `Simulate ${load.label} left on`}
+        </button>)}
+    </div>
+    <p role="status">{message || 'Start Wokwi and leave the room empty with all equipment off.'}</p>
+  </div>;
+}
+
 function App() {
   const [selection, select] = useState('');
   const [data, setData] = useState(null);
@@ -113,6 +157,9 @@ function App() {
       {control && <section className="panel control">
         <h2>Automatic equipment shutoff</h2>
         <p>{(health.auto_load_off ?? health.auto_light_off) ? 'Enabled' : 'Disabled'} · Acts when an unoccupied room reports equipment still on.</p>
+        {(health.equipment_demo_available || health.light_demo_available) &&
+          <EquipmentDemo key={room.device_id} room={room} allTargets={health.equipment_demo_available}
+            ready={health.mqtt_connected && !stale && !error} />}
         {control.actions.length === 0 && <p>No shutoff actions recorded.</p>}
         {control.actions.map(action => <article key={action.command_id} className="action">
           <div className="axis">

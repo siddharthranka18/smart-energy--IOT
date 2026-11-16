@@ -5,14 +5,17 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from time import monotonic
 from typing import Any
+from uuid import uuid4
 
 from phase4.config import Settings
-from phase4.control import on_ack, on_sample, publish_off, record_failure
+from phase4.control import LOADS, on_ack, on_sample, publish_command, publish_off, record_failure
 from phase4.ingest import ingest_message
 
 
 logger = logging.getLogger("phase4")
+DEMO_VISIBLE_SECONDS = 12
 
 
 class ServiceStatus:
@@ -63,6 +66,39 @@ class TelemetryListener:
         self.session_factory = session_factory
         self.status = status
         self._client: Any = None
+        self._demo_lock = threading.Lock()
+        self._room_demos: dict[str, tuple[str, float, bool]] = {}
+
+    def start_equipment_demo(self, topic: str, target: str) -> str:
+        with self._demo_lock:
+            if self._client is None or not self._client.is_connected():
+                return "offline"
+            now = monotonic()
+            self._room_demos = {key: demo for key, demo in self._room_demos.items() if demo[1] > now}
+            if topic in self._room_demos:
+                return "active"
+            result = publish_command(self._client, topic, uuid4().hex, target, "on", 120)
+            if result.rc != 0:
+                return "offline"
+            self._room_demos[topic] = (target, now + 60, False)
+            return "started"
+
+    def hold_demo_load(self, topic: str, sample: Any) -> bool:
+        """Give the presenter time to see the first reported ON state."""
+        with self._demo_lock:
+            timing = self._room_demos.get(topic)
+            if timing is None:
+                return False
+            target, deadline, seen_on = timing
+            now = monotonic()
+            target_on = getattr(sample, f"{target}_on")
+            other_on = any(getattr(sample, f"{load}_on") for load in LOADS if load != target)
+            if now >= deadline or sample.occupied or other_on or (seen_on and not target_on):
+                self._room_demos.pop(topic, None)
+                return False
+            if target_on and not seen_on:
+                self._room_demos[topic] = (target, now + DEMO_VISIBLE_SECONDS, True)
+            return True
 
     def start(self) -> None:
         # Step 1: Import the MQTT library only when the listener is actually started.
@@ -131,7 +167,10 @@ class TelemetryListener:
         if not self.settings.auto_load_off or message.retain or outcome["status"] != "stored":
             return
         try:
-            command = on_sample(self.session_factory, outcome["id"], client.is_connected())
+            command = on_sample(
+                self.session_factory, outcome["id"], client.is_connected(),
+                lambda sample: self.hold_demo_load(message.topic, sample),
+            )
             if command:
                 command_id, target = command
                 if publish_off(client, message.topic, command_id, target).rc != 0:

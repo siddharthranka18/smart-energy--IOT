@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
+from paho.mqtt.client import topic_matches_sub
 from sqlalchemy import select, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from phase4.config import SIMULATED_MEASUREMENT_NOTE
-from phase4.control import action_status
+from phase4.control import LOADS, RETRY_DELAY, action_status
 from phase4.models import ControlAction
 from phase4.storage import energy_summary, latest_sample, list_rooms, list_samples, sample_to_dict
 
@@ -63,6 +64,8 @@ def health(request: Request) -> dict[str, Any]:
         "mqtt_enabled": request.app.state.settings.mqtt_enabled,
         "auto_light_off": request.app.state.settings.auto_load_off,
         "auto_load_off": request.app.state.settings.auto_load_off,
+        "light_demo_available": request.app.state.settings.auto_load_off and request.app.state.settings.mqtt_enabled,
+        "equipment_demo_available": request.app.state.settings.auto_load_off and request.app.state.settings.mqtt_enabled,
         "mqtt_broker": request.app.state.settings.mqtt_broker,
         "mqtt_topic": request.app.state.settings.mqtt_topic,
         **mqtt,
@@ -148,3 +151,39 @@ def control_actions(device_id: str, request: Request) -> dict[str, Any]:
             "before_w": row.before_w, "after_w": row.after_w, "detail": row.detail,
         })
     return {"actions": actions}
+
+
+@router.post("/rooms/{device_id}/{target}-demo", status_code=202)
+def equipment_demo(device_id: str, target: str, request: Request, x_demo_intent: str = Header()) -> dict[str, str]:
+    device_id = _require_device_id(device_id)
+    if target not in LOADS or x_demo_intent != f"{target}-demo":
+        raise HTTPException(status_code=400, detail="Invalid demo request.")
+    settings = request.app.state.settings
+    listener = request.app.state.listener
+    if not settings.auto_load_off:
+        raise HTTPException(status_code=409, detail="Automatic equipment shutoff must be enabled for this demo.")
+    if listener is None:
+        raise HTTPException(status_code=503, detail="MQTT is unavailable.")
+
+    def read_room(session):
+        action = session.scalar(select(ControlAction).where(ControlAction.device_id == device_id)
+            .order_by(ControlAction.started_at.desc()).limit(1))
+        return latest_sample(session, device_id), action
+
+    sample, action = _run(request, read_room)
+    now = datetime.now(timezone.utc)
+    if (sample is None or now - sample.received_at > timedelta(seconds=30)
+            or not topic_matches_sub(settings.mqtt_topic, sample.mqtt_topic)):
+        raise HTTPException(status_code=409, detail="Start Wokwi and wait for a fresh room reading.")
+    if sample.occupied or sample.light_on or sample.fan_on or sample.ac_on:
+        raise HTTPException(status_code=409, detail="Wait until the room is empty and all equipment is off.")
+    if target in ("fan", "ac") and not sample.dht_valid:
+        raise HTTPException(status_code=409, detail="Wait for a valid temperature reading from the DHT22.")
+    if action and action.status != "confirmed" and now < action.deadline + RETRY_DELAY:
+        raise HTTPException(status_code=409, detail="The previous shutoff is still pending or cooling down.")
+    outcome = listener.start_equipment_demo(sample.mqtt_topic, target)
+    if outcome == "active":
+        raise HTTPException(status_code=409, detail="An equipment demo is already running for this room.")
+    if outcome == "offline":
+        raise HTTPException(status_code=503, detail="MQTT is unavailable. Wait for it to reconnect.")
+    return {"status": outcome}

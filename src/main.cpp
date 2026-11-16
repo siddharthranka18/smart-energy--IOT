@@ -34,6 +34,7 @@ constexpr uint8_t PIN_PIR       = 14;  // PIR Motion Sensor OUT
 constexpr uint8_t PIN_DHT       = 15;  // DHT22 Data Bus (single-wire)
 constexpr uint8_t PIN_LDR       = 34;  // LDR Module Analog Output (ADC1_CH6)
 constexpr uint8_t PIN_CURRENT   = 35;  // Potentiometer simulating current sensor (ADC1_CH7)
+constexpr uint8_t PIN_ZERO_CURRENT = 27;  // Active-low Wokwi switch for the simulated current
 
 // ============================================================================
 // PHASE 1 — Control Thresholds & Calibration Constants (unchanged)
@@ -203,6 +204,7 @@ void setup() {
     pinMode(PIN_PIR, INPUT);
     pinMode(PIN_LDR, INPUT);
     pinMode(PIN_CURRENT, INPUT);
+    pinMode(PIN_ZERO_CURRENT, INPUT_PULLUP);
 
     // Safe initial output state: all loads OFF
     digitalWrite(PIN_LIGHT_LED, LOW);
@@ -281,7 +283,8 @@ void loop() {
         g_lastActuators = actuators;
 
         // 5. Read the simulated current channel and accumulate Phase 3 energy
-        computeEnergyMetrics(sensors, actuators, analogRead(PIN_CURRENT), currentMs, g_energy);
+        const int currentRaw = digitalRead(PIN_ZERO_CURRENT) == LOW ? 0 : analogRead(PIN_CURRENT);
+        computeEnergyMetrics(sensors, actuators, currentRaw, currentMs, g_energy);
 
         // 6. Output structured serial diagnostics
         printStatus(sensors, actuators, g_energy);

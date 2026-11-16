@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, delete, text
@@ -106,6 +106,55 @@ class Phase4ApiTests(unittest.TestCase):
         self.assertEqual(body["database"], "ok")
         self.assertFalse(body["mqtt_enabled"])
         self.assertTrue(body["current_is_simulated"])
+
+    def test_dashboard_light_demo_runs_then_resumes_automatic_shutoff(self):
+        self._check_equipment_demo("light", 20)
+
+    def test_dashboard_fan_demo_runs_then_resumes_automatic_shutoff(self):
+        self._check_equipment_demo("fan", 75)
+
+    def test_dashboard_ac_demo_runs_then_resumes_automatic_shutoff(self):
+        self._check_equipment_demo("ac", 1500)
+
+    def _check_equipment_demo(self, target, watts):
+        state = self.app.state
+        settings = state.settings
+        state.settings = replace(settings, auto_load_off=True)
+        self.addCleanup(setattr, state, "settings", settings)
+        listener = TelemetryListener(state.settings, state.session_factory, state.status)
+        state.listener = listener
+        self.addCleanup(setattr, state, "listener", None)
+        broker = Mock()
+        broker.publish.return_value.rc = 0
+        listener._client = broker
+        path = f"/rooms/room-1/{target}-demo"
+        headers = {"X-Demo-Intent": f"{target}-demo"}
+
+        def report(sequence, on):
+            body = _payload(sequence=sequence, uptime_ms=sequence * 2000,
+                occupied=False, light_on=on and target == "light", fan_on=on and target == "fan",
+                ac_on=on and target == "ac", power_w=watts if on else 0)
+            listener._on_message(broker, None, SimpleNamespace(
+                topic=TOPIC, payload=json.dumps(body).encode(), retain=False,
+            ))
+
+        self.assertEqual(self.client.post(path, headers=headers).status_code, 409)
+        report(1, False)
+        with patch("phase4.mqtt_listener.monotonic", return_value=100) as clock:
+            self.assertEqual(self.client.post(path, headers=headers).status_code, 202)
+            self.assertEqual(self.client.post(path, headers=headers).status_code, 409)
+            command = json.loads(broker.publish.call_args.args[1])
+            self.assertEqual((command["target"], command["action"]), (target, "on"))
+            clock.return_value = 110
+            report(2, True)
+            clock.return_value = 121
+            report(3, True)
+            self.assertEqual(broker.publish.call_count, 1)
+            clock.return_value = 123
+            report(4, True)
+            self.assertEqual(broker.publish.call_count, 2)
+            command = json.loads(broker.publish.call_args.args[1])
+            self.assertEqual((command["target"], command["action"]), (target, "off"))
 
     def test_auto_shutoff_requires_correlated_ack_and_fresh_telemetry(self):
         settings = replace(self.app.state.settings, auto_load_off=True)

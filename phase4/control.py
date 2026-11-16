@@ -26,7 +26,7 @@ def action_status(action, now):
     return action.status
 
 
-def on_sample(session_factory, sample_id, can_send):
+def on_sample(session_factory, sample_id, can_send, hold_demo_load=None):
     """Reserve at most one command per room and require post-ack telemetry."""
     now = datetime.now(timezone.utc)
     with session_factory.begin() as session:
@@ -53,7 +53,8 @@ def on_sample(session_factory, sample_id, can_send):
             else:
                 return None
         active_loads = [load for load in LOADS if getattr(sample, f"{load}_on")]
-        if (not can_send or sample.occupied or not active_loads
+        demo_hold = hold_demo_load is not None and hold_demo_load(sample)
+        if (not can_send or demo_hold or sample.occupied or not active_loads
                 or now - sample.received_at > timedelta(seconds=10)
                 or (action and action.status != "confirmed" and now < action.deadline + RETRY_DELAY)):
             return None
@@ -67,14 +68,18 @@ def on_sample(session_factory, sample_id, can_send):
         return command_id, target
 
 
-def publish_off(client, telemetry_topic, command_id, target):
+def publish_command(client, telemetry_topic, command_id, target, action, expires_in_seconds):
     room_topic, _ = telemetry_topic.rsplit("/", 1)
     device_id = room_topic.rsplit("/", 1)[-1]
     payload = {
         "schema_version": 1, "command_id": command_id, "device_id": device_id,
-        "target": target, "action": "off", "mode": "manual", "expires_in_seconds": 30,
+        "target": target, "action": action, "mode": "manual", "expires_in_seconds": expires_in_seconds,
     }
     return client.publish(room_topic + "/command", json.dumps(payload), qos=0, retain=False)
+
+
+def publish_off(client, telemetry_topic, command_id, target):
+    return publish_command(client, telemetry_topic, command_id, target, "off", 30)
 
 
 def record_failure(session_factory, command_id, detail):

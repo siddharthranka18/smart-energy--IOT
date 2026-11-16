@@ -170,6 +170,20 @@
       "attrs": {
         "text": "SIMULATED CURRENT SENSOR\n(0-10A Analog -> GPIO 35)"
       }
+    },
+    {
+      "type": "wokwi-slide-switch",
+      "id": "zero_current",
+      "top": 400,
+      "left": 0,
+      "attrs": { "bounce": "0" }
+    },
+    {
+      "type": "wokwi-text",
+      "id": "txt_zero_current",
+      "top": 437,
+      "left": -12,
+      "attrs": { "text": "CURRENT MODE\nKNOB  |  ZERO" }
     }
   ],
   "connections": [
@@ -193,7 +207,9 @@
     ["esp:GND.1", "dht1:GND", "black", []],
     ["esp:35", "current1:SIG", "cyan", []],
     ["esp:3V3", "current1:VCC", "red", []],
-    ["esp:GND.1", "current1:GND", "black", []]
+    ["esp:GND.1", "current1:GND", "black", []],
+    ["esp:27", "zero_current:2", "violet", []],
+    ["esp:GND.1", "zero_current:3", "black", []]
   ],
   "dependencies": {}
 }

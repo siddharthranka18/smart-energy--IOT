@@ -61,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             listener.start()
         else:
             status.set_mqtt_connected(False, "MQTT listener disabled")
+        app.state.listener = listener
 
         try:
             yield

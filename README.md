@@ -274,7 +274,11 @@ The API listens on `http://127.0.0.1:8000`. Interactive docs are at `http://127.
 
 #### Demonstrate verified automatic equipment shutoff
 
-Set `AUTO_LOAD_OFF=1` in the root `.env` and restart the backend. Existing `AUTO_LIGHT_OFF=1` settings also enable the expanded rule unless `AUTO_LOAD_OFF` is set. Use a single automation backend for the demo room. On startup the backend upgrades the control history table and preserves existing light actions. Keep Wokwi running with the room unoccupied and the current knob at zero.
+Enable automatic shutoff once with `AUTO_LOAD_OFF=1` in the root `.env` and restart the backend. Existing `AUTO_LIGHT_OFF=1` settings also enable the rule unless `AUTO_LOAD_OFF` is set. Use one automation backend for the demo room.
+
+Keep Wokwi running with the room empty and all equipment off. Click the **CURRENT MODE** switch beside the knob to move it right to **ZERO**. This sets the simulated current input to zero, while equipment that is on still contributes its modeled power. Move the switch left to **KNOB** to use the knob again. Rebuild the ESP32 firmware before using the new switch.
+
+Under **Automatic equipment shutoff**, click **Simulate light left on**, **Simulate fan left on**, or **Simulate AC left on**. Once its ON reading arrives, the backend gives you 12 seconds to see the matching LED (yellow, blue, or orange). On the next reading after that window, its normal rule sends the OFF command and records the verification. Wait for confirmation before starting the next demo.
 
 To simulate a light left on, publish the following non-retained payload from your MQTT client to the room's command topic. With the default demo namespace, use `smart-energy-demo/siddharthranka18-smart-energy-2026/room-1/command`.
 
