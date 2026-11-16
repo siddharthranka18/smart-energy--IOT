@@ -9,3 +9,6 @@ __pycache__/
 logs/
 *.jsonl
 .env
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.env.local

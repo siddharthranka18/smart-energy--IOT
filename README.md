@@ -267,4 +267,13 @@ The API listens on `http://127.0.0.1:8000`. Interactive docs are at `http://127.
 - [x] **Phase 3**: Multi-room MQTT telemetry ingestion, validation and structured logging service
 - [x] **Phase 3**: 20 C++ energy assertions and 12 Python ingestion tests passing
 - [x] **Phase 4**: FastAPI backend and PostgreSQL history for telemetry, energy, cost, and alerts
-- [ ] **Phase 5**: Web monitoring and control dashboard (React / Vite)
+- [x] **Phase 5 monitoring**: React dashboard for live room status, power history, energy, cost, and current alerts
+- [ ] **Phase 5 controls**: Send commands from the dashboard and verify the reported device state
+
+### Run the dashboard locally
+
+1. Start PostgreSQL and the API using [Phase 4 setup](PHASE_4_VERIFICATION.md).
+2. From the project root, run `npm --prefix dashboard ci`, then `npm --prefix dashboard run dev`.
+3. Open the localhost URL printed by Vite and start Wokwi. A room appears after its first reading is stored.
+
+The dashboard proxies requests to `http://127.0.0.1:8000`. If your API uses another host or port, set `ENERGY_API_URL` in `dashboard/.env.local` and restart Vite.

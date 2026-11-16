@@ -51,7 +51,9 @@ Docker is optional. From the project folder, if Docker is installed:
 docker compose up -d
 ```
 
-Without Docker, install PostgreSQL 16 for Windows. This project machine already has PostgreSQL 16 running as the Windows service `smart-energy-postgres`. The installer superuser is `postgres` with password `energy`. Create the application login in psql:
+If port 5432 is already in use, set `POSTGRES_HOST_PORT=55432` in the root `.env` and change the port in `DATABASE_URL` in the same file before starting Compose. Keep the default port if your existing setup already works.
+
+For a native PostgreSQL installation, use your local PostgreSQL administrator account to create the application role and databases. Check the port of your installation (for example 5433) and use that port in `DATABASE_URL`. Run these statements only if the role and databases are missing:
 
 ```sql
 CREATE USER energy WITH PASSWORD 'energy';
@@ -64,9 +66,10 @@ The second database is only for the automated API tests.
 ## Run the backend
 
 ```powershell
-py -m pip install -r requirements-phase4.txt
-copy .env.example .env
-py -m phase4
+python -m pip install -r requirements-phase4.txt
+# If .env does not already exist:
+Copy-Item .env.example .env
+python -m phase4
 ```
 
 Leave that window open. The API is `http://127.0.0.1:8000` and the interactive page is `http://127.0.0.1:8000/docs`.
