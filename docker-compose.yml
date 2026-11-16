@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: smart-energy-postgres
+    environment:
+      POSTGRES_USER: energy
+      POSTGRES_PASSWORD: energy
+      POSTGRES_DB: smart_energy
+    ports:
+      - "5432:5432"
+    volumes:
+      - smart_energy_pg:/var/lib/postgresql/data
+
+volumes:
+  smart_energy_pg:

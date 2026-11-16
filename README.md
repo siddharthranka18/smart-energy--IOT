@@ -240,7 +240,17 @@ mosquitto_pub -h broker.hivemq.com -p 1883 -t "smart-energy-demo/siddharthranka1
 python -m pip install -r requirements-phase3.txt
 python -m phase3.ingestion_service
 ```
-The service subscribes to `smart-energy-demo/siddharthranka18-smart-energy-2026/+/telemetry`, validates each room payload, adds a UTC reception timestamp, and prints structured accepted/rejected records. Set `TELEMETRY_LOG_PATH` to optionally append JSONL records. No database is introduced until Phase 4.
+The service subscribes to `smart-energy-demo/siddharthranka18-smart-energy-2026/+/telemetry`, validates each room payload, adds a UTC reception timestamp, and prints structured accepted/rejected records. Set `TELEMETRY_LOG_PATH` to optionally append JSONL records. This console service does not write to a database.
+
+### 6. Run the Phase 4 API and database
+Phase 4 stores those same validated readings in PostgreSQL and serves them over HTTP. Setup, endpoint examples, and the Wokwi check are in [`PHASE_4_VERIFICATION.md`](PHASE_4_VERIFICATION.md).
+
+```powershell
+py -m pip install -r requirements-phase4.txt
+py -m phase4
+```
+
+The API listens on `http://127.0.0.1:8000`. Interactive docs are at `http://127.0.0.1:8000/docs`. Current and power remain simulated values published by the firmware.
 
 ---
 
@@ -256,5 +266,5 @@ The service subscribes to `smart-energy-demo/siddharthranka18-smart-energy-2026/
 - [x] **Phase 3**: High-power and unoccupied-room energy alerts over MQTT
 - [x] **Phase 3**: Multi-room MQTT telemetry ingestion, validation and structured logging service
 - [x] **Phase 3**: 20 C++ energy assertions and 12 Python ingestion tests passing
-- [ ] **Phase 4**: Python backend (FastAPI) and PostgreSQL database
+- [x] **Phase 4**: FastAPI backend and PostgreSQL history for telemetry, energy, cost, and alerts
 - [ ] **Phase 5**: Web monitoring and control dashboard (React / Vite)
