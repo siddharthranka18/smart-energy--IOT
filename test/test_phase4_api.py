@@ -83,6 +83,7 @@ class Phase4ApiTests(unittest.TestCase):
             mqtt_enabled=False,
             api_host="127.0.0.1",
             api_port=8000,
+            waste_hold_seconds=0,
         )
         cls.app = create_app(settings)
         cls.client_context = TestClient(cls.app)
@@ -119,7 +120,7 @@ class Phase4ApiTests(unittest.TestCase):
     def _check_equipment_demo(self, target, watts):
         state = self.app.state
         settings = state.settings
-        state.settings = replace(settings, auto_load_off=True)
+        state.settings = replace(settings, auto_load_off=True, waste_hold_seconds=0)
         self.addCleanup(setattr, state, "settings", settings)
         listener = TelemetryListener(state.settings, state.session_factory, state.status)
         state.listener = listener
@@ -157,7 +158,7 @@ class Phase4ApiTests(unittest.TestCase):
             self.assertEqual((command["target"], command["action"]), (target, "off"))
 
     def test_auto_shutoff_requires_correlated_ack_and_fresh_telemetry(self):
-        settings = replace(self.app.state.settings, auto_load_off=True)
+        settings = replace(self.app.state.settings, auto_load_off=True, waste_hold_seconds=0)
         listener = TelemetryListener(settings, self.app.state.session_factory, self.app.state.status)
         broker = Mock()
         broker.publish.return_value.rc = 0
@@ -201,7 +202,7 @@ class Phase4ApiTests(unittest.TestCase):
         self.assertEqual((result["before_w"], result["after_w"]), (20, 0))
 
     def test_shutoff_targets_fan_ac_and_multiple_loads(self):
-        settings = replace(self.app.state.settings, auto_load_off=True)
+        settings = replace(self.app.state.settings, auto_load_off=True, waste_hold_seconds=0)
         listener = TelemetryListener(settings, self.app.state.session_factory, self.app.state.status)
         broker = Mock()
         broker.publish.return_value.rc = 0
@@ -244,7 +245,8 @@ class Phase4ApiTests(unittest.TestCase):
                 started_at=now - timedelta(minutes=3), deadline=now - timedelta(minutes=1),
                 before_w=20, before_sequence=1, before_uptime_ms=2000))
         action = self.client.get("/rooms/room-1/control-actions").json()["actions"][0]
-        self.assertEqual(action["status"], "timed_out")
+        self.assertEqual(action["status"], "unconfirmed")
+        self.assertEqual(action["display_status"], "unconfirmed")
         self.assertIsNone(action["after_w"])
 
     def test_missing_room_returns_404_and_bad_id_returns_400(self):

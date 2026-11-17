@@ -35,10 +35,21 @@ class Settings:
     api_host: str
     api_port: int
     auto_load_off: bool = False
+    # Demo 30s, normal test 60s, report example 300s. One setting for the whole backend.
+    waste_hold_seconds: int = 30
 
 
 def _flag(name: str, default: str) -> bool:
     return os.getenv(name, default).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _seconds(name: str, default: str) -> int:
+    raw = os.getenv(name, default).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        value = int(default)
+    return max(0, min(value, 3600))
 
 
 def load_settings() -> Settings:
@@ -53,4 +64,5 @@ def load_settings() -> Settings:
         api_host=os.getenv("API_HOST", "127.0.0.1").strip(),
         api_port=int(os.getenv("API_PORT", "8000")),
         auto_load_off=_flag("AUTO_LOAD_OFF", os.getenv("AUTO_LIGHT_OFF", "0")),
+        waste_hold_seconds=_seconds("WASTE_HOLD_SECONDS", "30"),
     )

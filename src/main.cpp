@@ -719,36 +719,44 @@ void parseAndApplyCommand(const byte* payload, unsigned int length, ActuatorStat
         }
     }
 
-    // A new single-target command replaces the previous override session.
-    // Rebuild the unselected outputs from current automatic rules immediately.
-    clearManualOverride();
+    // Merge with any active override so Light ON then Fan ON can both stay on.
+    // Unselected channels keep their previous manual values.
     if (g_haveSensorReadings) {
         computeControlLogic(g_lastSensors, currentActuators);
     } else {
         currentActuators = {false, false, false};
     }
 
+    if (g_override.mode != ControlMode::MANUAL_OVERRIDE) {
+        clearManualOverride();
+    }
     g_override.mode       = ControlMode::MANUAL_OVERRIDE;
     g_override.startMs    = now;
     g_override.durationMs = static_cast<unsigned long>(expirySec) * 1000UL;
-    // Set the active-channel mask only after the automatic baseline has been
-    // rebuilt. Keep this explicit so no previous channel can remain selected.
-    g_override.lightActive = false;
-    g_override.fanActive   = false;
-    g_override.acActive    = false;
 
     if (targetLight) {
         g_override.lightActive = true;
         g_override.lightValue  = desiredState;
-        currentActuators.lightOn = desiredState;
     } else if (targetFan) {
         g_override.fanActive = true;
         g_override.fanValue  = desiredState;
-        currentActuators.fanOn = desiredState;
     } else if (targetAc) {
         g_override.acActive = true;
         g_override.acValue  = desiredState;
-        currentActuators.acOn = desiredState;
+    }
+
+    if (g_override.lightActive) currentActuators.lightOn = g_override.lightValue;
+    if (g_override.fanActive) {
+        currentActuators.fanOn = (g_override.fanValue && (!g_haveSensorReadings || g_lastSensors.dhtValid));
+    }
+    if (g_override.acActive) {
+        currentActuators.acOn = (g_override.acValue && (!g_haveSensorReadings || g_lastSensors.dhtValid));
+    }
+
+    // Keep the override while empty so "left on" demos and waste detection can work.
+    // Backend AUTO_LOAD_OFF (or override expiry) turns the load off after the hold.
+    if (g_haveSensorReadings) {
+        updateManualOverride(currentActuators, g_lastSensors);
     }
 
     applyActuators(currentActuators);
@@ -760,14 +768,15 @@ void parseAndApplyCommand(const byte* payload, unsigned int length, ActuatorStat
 void updateManualOverride(ActuatorState &actuators, const SensorReadings &sensors) {
     if (g_override.mode != ControlMode::MANUAL_OVERRIDE) return;
 
-    // Check expiration using safe unsigned difference
+    // Step 1: Check expiration using safe unsigned difference
     if (millis() - g_override.startMs >= g_override.durationMs) {
         clearManualOverride();
         Serial.println("[Override] Timer expired. Restoring automatic control.");
         return;
     }
 
-    // Apply specific overrides on top of automatic computations
+    // Step 2: Apply overrides even when the room is empty so a "left on" waste
+    // case (and the dashboard demo) can keep a load ON until AUTO_LOAD_OFF or expiry.
     if (g_override.lightActive) {
         actuators.lightOn = g_override.lightValue;
     }

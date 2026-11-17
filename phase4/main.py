@@ -35,6 +35,19 @@ def init_database(engine: Any) -> None:
             "ALTER TABLE control_actions ADD COLUMN IF NOT EXISTS "
             "target VARCHAR(5) NOT NULL DEFAULT 'light'"
         ))
+        for statement in (
+            "ALTER TABLE control_actions ADD COLUMN IF NOT EXISTS waste_started_at TIMESTAMPTZ",
+            "ALTER TABLE control_actions ADD COLUMN IF NOT EXISTS detection_at TIMESTAMPTZ",
+            "ALTER TABLE control_actions ADD COLUMN IF NOT EXISTS hold_seconds INTEGER",
+            "ALTER TABLE control_actions ADD COLUMN IF NOT EXISTS mqtt_command_status VARCHAR(20)",
+            "ALTER TABLE control_actions ADD COLUMN IF NOT EXISTS ack_status VARCHAR(20)",
+            "ALTER TABLE control_actions ADD COLUMN IF NOT EXISTS telemetry_confirmed BOOLEAN NOT NULL DEFAULT false",
+            "ALTER TABLE control_actions ADD COLUMN IF NOT EXISTS energy_saved_wh DOUBLE PRECISION",
+            "ALTER TABLE control_actions ADD COLUMN IF NOT EXISTS energy_saved_kwh DOUBLE PRECISION",
+            "ALTER TABLE control_actions ADD COLUMN IF NOT EXISTS money_saved_inr DOUBLE PRECISION",
+            "ALTER TABLE control_actions ALTER COLUMN detail TYPE VARCHAR(200)",
+        ):
+            connection.execute(text(statement))
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

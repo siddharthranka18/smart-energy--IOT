@@ -170,7 +170,7 @@ The architecture bridges edge sensor automation with cloud telemetry and control
 - Target `all` with action `off` disables all loads.
 - Climate `on` commands are rejected until a valid DHT22 sample is available.
 - Override durations outside 1–3600 seconds use the safe 60-second default.
-- A new single-target command replaces the previous override session; unselected loads immediately return to automatic rules.
+- A new single-target command merges with the current override session, so Light ON then Fan ON can both stay on. Empty-room occupancy still turns every load off.
 
 ### 3. Command Result Acknowledgement (`.../state`)
 ```json
@@ -268,13 +268,14 @@ The API listens on `http://127.0.0.1:8000`. Interactive docs are at `http://127.
 - [x] **Phase 3**: 20 C++ energy assertions and 12 Python ingestion tests passing
 - [x] **Phase 4**: FastAPI backend and PostgreSQL history for telemetry, energy, cost, and alerts
 - [x] **Phase 5 monitoring**: React dashboard for live room status, power history, energy, cost, and current alerts
-- [ ] **Phase 5 controls**: Send commands from the dashboard and verify the reported device state
+- [x] **Phase 5 controls**: Manual light / fan / AC commands from the dashboard through MQTT
+- [x] **Phase 6**: Configurable waste hold timer, confirmed savings estimates, analytics APIs and dashboard
 
 ### Run the dashboard locally
 
 #### Demonstrate verified automatic equipment shutoff
 
-Enable automatic shutoff once with `AUTO_LOAD_OFF=1` in the root `.env` and restart the backend. Existing `AUTO_LIGHT_OFF=1` settings also enable the rule unless `AUTO_LOAD_OFF` is set. Use one automation backend for the demo room.
+Enable automatic shutoff once with `AUTO_LOAD_OFF=1` in the root `.env` and restart the backend. Existing `AUTO_LIGHT_OFF=1` settings also enable the rule unless `AUTO_LOAD_OFF` is set. Set `WASTE_HOLD_SECONDS=30` for the classroom demo, `60` for normal tests, or `300` as the five-minute report example. Use one automation backend for the demo room. Details are in [`PHASE_6_VERIFICATION.md`](PHASE_6_VERIFICATION.md).
 
 Keep Wokwi running with the room empty and all equipment off. Click the **CURRENT MODE** switch beside the knob to move it right to **ZERO**. This sets the simulated current input to zero, while equipment that is on still contributes its modeled power. Move the switch left to **KNOB** to use the knob again. Rebuild the ESP32 firmware before using the new switch.
 

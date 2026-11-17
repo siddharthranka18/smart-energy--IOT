@@ -166,19 +166,29 @@ CmdResult applyParsedCommand(const ParsedCommand& cmd, ManualOverride& ovr,
         if (!cmd.latestSensors.dhtValid) return CmdResult::DHT_INVALID;
     }
 
-    ovr = ManualOverride();
     if (cmd.hasLatestSensors) {
         computeControlLogic(cmd.latestSensors, actuators);
     } else {
         actuators = {false, false, false};
     }
+    if (ovr.mode != ControlMode::MANUAL_OVERRIDE) {
+        ovr = ManualOverride();
+    }
     ovr.mode       = ControlMode::MANUAL_OVERRIDE;
     ovr.startMs    = nowMs;
     ovr.durationMs = static_cast<unsigned long>(expiry) * 1000UL;
 
-    if (targetLight) { ovr.lightActive = true; ovr.lightValue = desiredState; actuators.lightOn = desiredState; }
-    if (targetFan)   { ovr.fanActive   = true; ovr.fanValue   = desiredState; actuators.fanOn   = desiredState; }
-    if (targetAc)    { ovr.acActive    = true; ovr.acValue    = desiredState; actuators.acOn    = desiredState; }
+    if (targetLight) { ovr.lightActive = true; ovr.lightValue = desiredState; }
+    if (targetFan)   { ovr.fanActive   = true; ovr.fanValue   = desiredState; }
+    if (targetAc)    { ovr.acActive    = true; ovr.acValue    = desiredState; }
+
+    if (ovr.lightActive) actuators.lightOn = ovr.lightValue;
+    if (ovr.fanActive) {
+        actuators.fanOn = (ovr.fanValue && (!cmd.hasLatestSensors || cmd.latestSensors.dhtValid));
+    }
+    if (ovr.acActive) {
+        actuators.acOn = (ovr.acValue && (!cmd.hasLatestSensors || cmd.latestSensors.dhtValid));
+    }
 
     return CmdResult::ACCEPTED;
 }
@@ -284,6 +294,7 @@ void updateManualOverride(ManualOverride& ovr, ActuatorState& actuators,
         return;
     }
 
+    // Keep overrides while empty so waste/"left on" demos can hold a load ON.
     if (ovr.lightActive) actuators.lightOn = ovr.lightValue;
     if (ovr.fanActive)   actuators.fanOn   = (ovr.fanValue && sensors.dhtValid);
     if (ovr.acActive)    actuators.acOn    = (ovr.acValue  && sensors.dhtValid);
@@ -504,6 +515,19 @@ int main() {
     checkBool("20. Fan ON (33C >= 28C)",     true,  a20.fanOn);
     checkBool("20. AC ON (33C >= 32C)",      true,  a20.acOn);
 
+    // 21. Empty room keeps a manual ON (waste / "left on" demo); backend shutoff clears it later
+    ovr = ManualOverride();
+    ActuatorState a21 = {false, false, false};
+    SensorReadings sEmpty = {false, 2500, true, 33.0f, 60.0f, true};
+    applyParsedCommand(makeCmd("cmd-021-empty", "room-1", "ac", "on", 300), ovr, a21, 1000);
+    checkMode("21. Manual AC ON starts an override session", ControlMode::MANUAL_OVERRIDE, ovr.mode);
+    computeControlLogic(sEmpty, a21);
+    updateManualOverride(ovr, a21, sEmpty, 2000);
+    checkMode("21. Override stays active while empty", ControlMode::MANUAL_OVERRIDE, ovr.mode);
+    checkBool("21. Light stays OFF (not targeted)", false, a21.lightOn);
+    checkBool("21. Fan stays OFF (not targeted)", false, a21.fanOn);
+    checkBool("21. AC stays ON while empty (waste case)", true, a21.acOn);
+
     // ============================================================
     // Real-World Payload Parsing & Normalization Tests (Phase 2 Fix)
     // ============================================================
@@ -601,17 +625,18 @@ int main() {
     checkBool("25. Excessive duration replaced with default", true,
               ovr.durationMs == DEFAULT_OVERRIDE_SECONDS * 1000UL);
 
-    // 26. A new command replaces older channel overrides and restores unselected outputs
-    ovr = ManualOverride(); act = {true, false, false};
+    // 26. A new command merges with older channel overrides
+    ovr = ManualOverride(); act = {false, false, false};
     ParsedCommand c26a = makeCmd("cmd-026a", "room-1", "light", "on", 60);
-    c26a.latestSensors = {true, 2500, true, 30.0f, 50.0f, true};
+    c26a.latestSensors = {true, 500, false, 24.0f, 50.0f, true};
     applyParsedCommand(c26a, ovr, act, 26000);
-    ParsedCommand c26b = makeCmd("cmd-026b", "room-1", "fan", "off", 60);
+    ParsedCommand c26b = makeCmd("cmd-026b", "room-1", "fan", "on", 60);
     c26b.latestSensors = c26a.latestSensors;
     result = applyParsedCommand(c26b, ovr, act, 27000);
-    checkResult("26. Replacement override accepted", CmdResult::ACCEPTED, result);
-    checkBool("26. Previous light override flag cleared", false, ovr.lightActive);
-    checkBool("26. Unselected light follows automatic rules", true, act.lightOn);
+    checkResult("26. Merged override accepted", CmdResult::ACCEPTED, result);
+    checkBool("26. Previous light override stays active", true, ovr.lightActive);
+    checkBool("26. Light stays ON after Fan ON", true, act.lightOn);
+    checkBool("26. Fan is ON after merge", true, act.fanOn);
 
     std::cout << "------------------------------------------------------------\n";
     std::cout << "Results: " << g_passed << " / " << (g_passed + g_failed) << " tests passed.\n";

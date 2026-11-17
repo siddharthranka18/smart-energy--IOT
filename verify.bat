@@ -1,7 +1,7 @@
 @echo off
 setlocal enabledelayedexpansion
 echo ========================================================
-echo Running Automated Logic Verification Suite (Phase 1 + 2 + 3 + 4)
+echo Running Automated Logic Verification Suite (Phase 1 + 2 + 3 + 4 + 6)
 echo ========================================================
 
 where g++ >nul 2>nul
@@ -67,12 +67,12 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo [Phase 4] Running backend logic and PostgreSQL API tests...
+echo [Phase 4/6] Running backend logic, API, and waste-savings tests...
 python --version >nul 2>nul
 if %ERRORLEVEL% equ 0 (
-    python -m unittest -v test.test_phase4_logic test.test_phase4_api
+    python -m unittest -v test.test_phase4_logic test.test_phase4_api test.test_phase6_waste
 ) else (
-    py -3 -m unittest -v test.test_phase4_logic test.test_phase4_api
+    py -3 -m unittest -v test.test_phase4_logic test.test_phase4_api test.test_phase6_waste
 )
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] Phase 4 tests failed!
@@ -80,5 +80,5 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo.
-echo [ALL PASS] All Phase 1, Phase 2, Phase 3, and Phase 4 tests passed cleanly!
+echo [ALL PASS] All Phase 1, Phase 2, Phase 3, Phase 4, and Phase 6 tests passed cleanly!
 exit /b 0

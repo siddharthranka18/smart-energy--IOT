@@ -26,11 +26,17 @@ select { font: inherit; padding: 8px; margin-left: 6px; border: 1px solid #52636
 dl { margin-bottom: 0; }
 dl div { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-top: 1px solid #34444c; }
 .warning { color: #ffd19a; background: #452e1f; padding: 10px 12px; border-radius: 7px; }
+.note { color: #aebdc5; background: #18262f; border: 1px solid #34444c; padding: 10px 12px; border-radius: 8px; }
 .control { margin-top: 12px; }
 .demo { margin: 14px 0; }
 .demo-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
-.demo button { background: #63d9b9; color: #111a20; border: 0; border-radius: 7px; padding: 9px 13px; font: inherit; font-weight: 650; cursor: pointer; }
-.demo button:disabled { opacity: .5; cursor: default; }
+.demo button, .panel button { background: #63d9b9; color: #111a20; border: 0; border-radius: 7px; padding: 9px 13px; font: inherit; font-weight: 650; cursor: pointer; }
+.demo button:disabled, .panel button:disabled { opacity: .5; cursor: default; }
 .action { border-top: 1px solid #34444c; margin-top: 12px; }
-.action-status { padding: 5px 8px; border-radius: 7px; }
+.action-status { padding: 5px 8px; border-radius: 7px; background: #34444c; }
+.action-status[data-ok="true"], .action-status[data-status="confirmed"] { color: #8ee9cd; background: #214740; }
+.action-status[data-status="failed"], .action-status[data-status="unconfirmed"], .action-status[data-status="timed_out"] { color: #ffd19a; background: #452e1f; }
+.action-status[data-status="cancelled"] { color: #aebdc5; background: #2a353c; }
+.bars.short { height: 110px; }
+.panel.inner { margin-top: 12px; background: #152029; }
 @media (max-width: 640px) { .details { grid-template-columns: 1fr; } }

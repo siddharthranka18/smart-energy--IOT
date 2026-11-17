@@ -170,6 +170,7 @@ class TelemetryListener:
             command = on_sample(
                 self.session_factory, outcome["id"], client.is_connected(),
                 lambda sample: self.hold_demo_load(message.topic, sample),
+                hold_seconds=self.settings.waste_hold_seconds,
             )
             if command:
                 command_id, target = command

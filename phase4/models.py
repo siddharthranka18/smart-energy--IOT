@@ -13,6 +13,12 @@ class Base(DeclarativeBase):
 
 
 class ControlAction(Base):
+    """Automatic waste shutoff event.
+
+    Status watching waits for the configured hold time. Status pending means the
+    OFF command was sent and is waiting for acknowledgement plus fresh telemetry.
+    """
+
     __tablename__ = "control_actions"
 
     command_id: Mapped[str] = mapped_column(String(32), primary_key=True)
@@ -27,7 +33,16 @@ class ControlAction(Base):
     ack_uptime_ms: Mapped[int | None] = mapped_column(BigInteger)
     after_w: Mapped[float | None] = mapped_column(Double)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    detail: Mapped[str | None] = mapped_column(String(100))
+    detail: Mapped[str | None] = mapped_column(String(200))
+    waste_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    detection_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    hold_seconds: Mapped[int | None] = mapped_column(Integer)
+    mqtt_command_status: Mapped[str | None] = mapped_column(String(20))
+    ack_status: Mapped[str | None] = mapped_column(String(20))
+    telemetry_confirmed: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    energy_saved_wh: Mapped[float | None] = mapped_column(Double)
+    energy_saved_kwh: Mapped[float | None] = mapped_column(Double)
+    money_saved_inr: Mapped[float | None] = mapped_column(Double)
 
 
 class TelemetrySample(Base):
